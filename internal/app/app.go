@@ -308,10 +308,14 @@ func runStart(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if !res.Stopped && res.ExitCode != 0 {
 		phase = instance.PhaseCrashed
 	}
+	// The server writes the session id next to its binary; it is best effort
+	// because a failed launch never creates the file.
+	gameID, _ := corekeeper.ReadGameID(inst.InstallDir)
 	if err := s.SaveState(name, instance.State{
 		Phase:     phase,
 		StartedAt: startedAt,
 		ExitCode:  res.ExitCode,
+		GameID:    gameID,
 	}); err != nil {
 		return err
 	}
@@ -366,8 +370,15 @@ func runStatus(args []string, stdout, stderr io.Writer) error {
 			[2]string{"uptime", time.Since(state.StartedAt).Round(time.Second).String()},
 		)
 	}
-	if state.GameID != "" {
-		rows = append(rows, [2]string{"game id", state.GameID})
+
+	// The file wins: it is what the running server reports right now, while the
+	// state only knows the id of the last finished run.
+	gameID := state.GameID
+	if id, err := corekeeper.ReadGameID(inst.InstallDir); err == nil {
+		gameID = id
+	}
+	if gameID != "" {
+		rows = append(rows, [2]string{"game id", gameID})
 	}
 	if state.Phase == instance.PhaseCrashed {
 		rows = append(rows, [2]string{"last exit", fmt.Sprint(state.ExitCode)})

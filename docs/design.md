@@ -6,7 +6,8 @@ The project doubles as a learning vehicle: every milestone introduces a Go conce
 program needs (process control, signals, concurrency, `net/http`, tests with `-race`), instead of
 synthetic exercises.
 
-**Status:** M0–M2 implemented (`doctor`, instance model and store, `install`/`update`). M3 is next.
+**Status:** M0–M3 implemented (`doctor`, instance model and store, `install`/`update`, `start`/`status`
+with join information). M3b is next.
 
 ## 1. Goals and non-goals
 
@@ -218,8 +219,8 @@ the project and deserves its own design and tests.
 | M0 | skeleton, `version`, `doctor` | `go build`, `go test -race`, `doctor` reports missing SteamCMD on this machine | packages, `io.Writer` injection, error wrapping, table tests |
 | M1 | `install`, `update` | server binary and Steam libs present, update is idempotent | `os/exec`, pipes, context cancellation, exit codes |
 | M2 | `create`, `list`, `show` | validation rejects bad names, ports and player counts; config survives restart | structs, JSON, atomic writes, `t.TempDir` |
-| M3 | `start`, `status`, `stop` | foreground run, SIGINT shutdown, crashed state detected after `kill -9` | process groups, signals, `exec.Cmd`, timeouts |
-| M3b | `--detach` | `start` returns, `status` sees the server, no orphan processes | re-exec, `Setsid`, file locking |
+| M3 | `start`, `status` | foreground run, SIGINT shutdown, crashed state detected after `kill -9`, join id reported | process groups, signals, `exec.Cmd`, timeouts |
+| M3b | `--detach`, `stop` | `start` returns, `status` sees the server, no orphan processes | re-exec, `Setsid`, file locking |
 | M4 | `logs` | `-f` follows live output without losing lines | `bufio.Scanner`, ring buffer, channels |
 | M5 | `backup`, `restore` | archive restores into a working world | `archive/tar`, `compress/gzip`, `filepath.WalkDir` |
 | M6 | `serve` | start/stop/status from the browser, live log via SSE | `net/http`, `Server.Shutdown`, `embed` |

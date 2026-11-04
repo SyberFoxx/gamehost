@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -93,6 +95,29 @@ func TestCreateListShow(t *testing.T) {
 
 	if _, err := runArgs(t, "create", "corekeeper"); !errors.Is(err, store.ErrExists) {
 		t.Errorf("second create error = %v, want ErrExists", err)
+	}
+}
+
+// covers status reading the game id the server wrote next to its binary
+func TestStatusReadsGameID(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+
+	layout := store.New(os.Getenv("GAMEHOST_HOME")).Layout("corekeeper")
+	info := "No GameID found. Creating new GameID for the session.\n\nGameID: u7iGUkFwJL65k5D"
+	if err := os.WriteFile(filepath.Join(layout.Files, "GameInfo.txt"), []byte(info), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runArgs(t, "status", "corekeeper")
+	if err != nil {
+		t.Fatalf("status error = %v", err)
+	}
+	if !strings.Contains(out, "u7iGUkFwJL65k5D") {
+		t.Errorf("status output missing the game id:\n%s", out)
 	}
 }
 
