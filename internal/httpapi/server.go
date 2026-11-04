@@ -1,0 +1,304 @@
+// Package httpapi exposes the instance lifecycle and log stream over HTTP.
+package httpapi
+
+import (
+	"bytes"
+	_ "embed"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/syberfoxx/gamehost/internal/corekeeper"
+	"github.com/syberfoxx/gamehost/internal/instance"
+	"github.com/syberfoxx/gamehost/internal/logs"
+	"github.com/syberfoxx/gamehost/internal/process"
+	"github.com/syberfoxx/gamehost/internal/store"
+)
+
+// panel is the single-page UI served at the root.
+//
+//go:embed ui/index.html
+var panel []byte
+
+// defaultTail is how many lines the log stream replays on connect.
+const defaultTail = 100
+
+// Status is the API view of one instance and its runtime state.
+type Status struct {
+	Name       string         `json:"name"`
+	Game       string         `json:"game"`
+	Phase      instance.Phase `json:"phase"`
+	PID        int            `json:"pid,omitempty"`
+	Uptime     string         `json:"uptime,omitempty"`
+	GameID     string         `json:"game_id,omitempty"`
+	LastExit   int            `json:"last_exit,omitempty"`
+	World      string         `json:"world"`
+	WorldMode  instance.Mode  `json:"world_mode"`
+	MaxPlayers int            `json:"max_players"`
+	Network    string         `json:"network"`
+	Port       int            `json:"port,omitempty"`
+}
+
+// Controller runs the lifecycle operations the API exposes.
+type Controller interface {
+	Start(name string) error
+	Stop(name string) error
+}
+
+// Server serves the API and the embedded panel.
+type Server struct {
+	store      *store.Store
+	controller Controller
+	mux        *http.ServeMux
+}
+
+// New returns a server for the instances in s, delegating lifecycle actions
+// to control so the API and the CLI share one implementation.
+func New(s *store.Store, control Controller) *Server {
+	srv := &Server{store: s, controller: control, mux: http.NewServeMux()}
+	srv.mux.HandleFunc("GET /api/instances", srv.listInstances)
+	srv.mux.HandleFunc("GET /api/instances/{name}", srv.showInstance)
+	srv.mux.HandleFunc("POST /api/instances/{name}/start", srv.startInstance)
+	srv.mux.HandleFunc("POST /api/instances/{name}/stop", srv.stopInstance)
+	srv.mux.HandleFunc("GET /api/instances/{name}/logs", srv.followLogs)
+	srv.mux.HandleFunc("GET /", srv.panel)
+	return srv
+}
+
+// ServeHTTP routes one request to its handler.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mux.ServeHTTP(w, r)
+}
+
+// listInstances returns every instance with its resolved phase.
+func (s *Server) listInstances(w http.ResponseWriter, _ *http.Request) {
+	instances, err := s.store.List()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	statuses := make([]Status, 0, len(instances))
+	for _, inst := range instances {
+		status, err := s.status(inst)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		statuses = append(statuses, status)
+	}
+	writeJSON(w, http.StatusOK, statuses)
+}
+
+// showInstance returns one instance with its resolved phase.
+func (s *Server) showInstance(w http.ResponseWriter, r *http.Request) {
+	inst, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
+	status, err := s.status(inst)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
+// startInstance launches a server in the background.
+func (s *Server) startInstance(w http.ResponseWriter, r *http.Request) {
+	inst, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
+	state, err := s.store.LoadState(inst.Name)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if state.Running() && process.Alive(state.PID) {
+		writeError(w, http.StatusConflict, fmt.Sprintf("instance %q is already running (pid %d)", inst.Name, state.PID))
+		return
+	}
+
+	if err := s.controller.Start(inst.Name); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeStatus(w, inst)
+}
+
+// stopInstance asks a running server to exit and reports the final phase.
+func (s *Server) stopInstance(w http.ResponseWriter, r *http.Request) {
+	inst, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
+	if err := s.controller.Stop(inst.Name); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeStatus(w, inst)
+}
+
+// followLogs streams the newest log as server-sent events.
+func (s *Server) followLogs(w http.ResponseWriter, r *http.Request) {
+	inst, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
+	path, err := logs.Latest(s.store.Layout(inst.Name).Logs)
+	if errors.Is(err, logs.ErrNoLogs) {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("no logs yet for %q, start it first", inst.Name))
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "this server cannot stream responses")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
+	stream := &eventStream{w: w, flush: flusher}
+	// The request context ends when the browser closes the stream.
+	if err := logs.Follow(r.Context(), stream, path, tailParam(r)); err != nil {
+		return
+	}
+}
+
+// panel serves the embedded UI and rejects unknown paths.
+func (s *Server) panel(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(panel) // the body is static, a write failure closes the connection
+}
+
+// writeStatus responds with the current status of inst.
+func (s *Server) writeStatus(w http.ResponseWriter, inst instance.Instance) {
+	status, err := s.status(inst)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
+// lookup validates the name in the path and loads its instance.
+func (s *Server) lookup(w http.ResponseWriter, r *http.Request) (instance.Instance, bool) {
+	name := r.PathValue("name")
+	if err := instance.ValidateName(name); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return instance.Instance{}, false
+	}
+	inst, err := s.store.Load(name)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, store.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err.Error())
+		return instance.Instance{}, false
+	}
+	return inst, true
+}
+
+// status combines the stored state with the liveness of its process.
+func (s *Server) status(inst instance.Instance) (Status, error) {
+	state, err := s.store.LoadState(inst.Name)
+	if err != nil {
+		return Status{}, err
+	}
+	live := process.Alive(state.PID)
+	state = state.Resolve(live)
+
+	status := Status{
+		Name:       inst.Name,
+		Game:       inst.Game,
+		Phase:      state.Phase,
+		World:      inst.World.Name,
+		WorldMode:  inst.World.Mode,
+		MaxPlayers: inst.MaxPlayers,
+		Network:    inst.Network.Mode,
+		Port:       inst.Network.Port,
+	}
+	if state.Running() {
+		status.PID = state.PID
+		status.Uptime = time.Since(state.StartedAt).Round(time.Second).String()
+	}
+	if state.Phase == instance.PhaseCrashed {
+		status.LastExit = state.ExitCode
+	}
+
+	// The file wins: it is what the running server reports right now.
+	if id, err := corekeeper.ReadGameID(inst.InstallDir); err == nil {
+		status.GameID = id
+	} else {
+		status.GameID = state.GameID
+	}
+	return status, nil
+}
+
+// tailParam reads the number of replayed log lines.
+func tailParam(r *http.Request) int {
+	raw := r.URL.Query().Get("tail")
+	if raw == "" {
+		return defaultTail
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return defaultTail
+	}
+	return n
+}
+
+// eventStream turns written log lines into server-sent events.
+type eventStream struct {
+	w     io.Writer
+	flush http.Flusher
+	buf   []byte
+}
+
+// Write buffers bytes and emits one event per complete line.
+func (e *eventStream) Write(p []byte) (int, error) {
+	e.buf = append(e.buf, p...)
+	for {
+		end := bytes.IndexByte(e.buf, '\n')
+		if end < 0 {
+			return len(p), nil
+		}
+		line := bytes.TrimSuffix(e.buf[:end], []byte("\r"))
+		if _, err := fmt.Fprintf(e.w, "data: %s\n\n", line); err != nil {
+			return 0, err
+		}
+		e.flush.Flush()
+		e.buf = e.buf[end+1:]
+	}
+}
+
+// writeJSON encodes value with the given status.
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value) // the header is already sent, nothing to report
+}
+
+// writeError sends a JSON error message.
+func writeError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"error": message})
+}

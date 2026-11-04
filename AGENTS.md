@@ -67,6 +67,8 @@ Entry point: `cmd/gamehost`. Design and roadmap: `docs/design.md`.
 - A server killed from outside by `SIGTERM`/`SIGINT` counts as a clean stop; do not report it as a
   crash.
 - `backup` and `restore` require a stopped server; Core Keeper rewrites world files in place.
+- `serve` binds `127.0.0.1:8080` and has no authentication; keep it on loopback and let a reverse
+  proxy own access control.
 - The restore extractor rejects any tar entry that is not local to the target directory; keep that
   check when touching `internal/backup`.
 - World data lives under `-datapath`, not next to the binary. Back up that directory.

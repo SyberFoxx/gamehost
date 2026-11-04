@@ -27,3 +27,16 @@ type State struct {
 func (s State) Running() bool {
 	return s.Phase == PhaseStarting || s.Phase == PhaseRunning
 }
+
+// Resolve reconciles the stored phase with the liveness of its process.
+// A running phase with a dead process means the server did not shut down
+// cleanly; a stopping phase whose process is gone finished its stop.
+func (s State) Resolve(alive bool) State {
+	switch {
+	case s.Running() && !alive:
+		s.Phase = PhaseCrashed
+	case s.Phase == PhaseStopping && !alive:
+		s.Phase = PhaseStopped
+	}
+	return s
+}

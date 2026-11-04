@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/syberfoxx/gamehost/internal/atomicfile"
 	"github.com/syberfoxx/gamehost/internal/instance"
 )
 
@@ -93,7 +94,7 @@ func (s *Store) Save(inst instance.Instance) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create instance directory: %w", err)
 	}
-	if err := writeFileAtomic(path, data, 0o644); err != nil {
+	if err := atomicfile.Replace(path, data, 0o644); err != nil {
 		return fmt.Errorf("save instance %q: %w", inst.Name, err)
 	}
 	return nil
@@ -163,7 +164,7 @@ func (s *Store) SaveState(name string, state instance.State) error {
 	data = append(data, '\n')
 
 	path := filepath.Join(s.Layout(name).Root, stateFile)
-	if err := writeFileAtomic(path, data, 0o644); err != nil {
+	if err := atomicfile.Replace(path, data, 0o644); err != nil {
 		return fmt.Errorf("save state of %q: %w", name, err)
 	}
 	return nil
@@ -186,33 +187,4 @@ func (s *Store) LoadState(name string) (instance.State, error) {
 		return instance.State{}, fmt.Errorf("decode %q: %w", path, err)
 	}
 	return state, nil
-}
-
-// writeFileAtomic replaces path with data, never leaving a partial file.
-func writeFileAtomic(path string, data []byte, perm fs.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }() // no-op after a successful rename
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write temp file: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("sync temp file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temp file: %w", err)
-	}
-	if err := os.Chmod(tmpName, perm); err != nil {
-		return fmt.Errorf("chmod temp file: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("replace %q: %w", path, err)
-	}
-	return nil
 }

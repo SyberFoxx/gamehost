@@ -32,8 +32,8 @@ concurrency and tests with `-race`.
 | M3b | `start --detach` / `stop`: background supervision | done |
 | M4 | `logs` / `logs -f`: tail and follow | done |
 | M5 | `backup` / `restore` | done |
-| M6 | `serve`: HTTP API and web panel | next |
-| M7 | second game driver | planned |
+| M6 | `serve`: HTTP API and web panel | done |
+| M7 | second game driver | next |
 
 ## Features
 
@@ -48,6 +48,8 @@ concurrency and tests with `-race`.
 - Tees server output to both the terminal and a per-run log file.
 - Archives the world into a compressed tar, prunes old copies and restores safely, keeping the
   previous data as a pre-restore backup.
+- Serves a small web panel and a JSON API with live status, start/stop controls and an SSE log
+  stream, embedding the page in the binary.
 
 ## Requirements
 
@@ -138,6 +140,7 @@ Passing `--port 27015` switches it to direct connections, which requires opening
 | `gamehost logs <name> -f` | follow the log until Ctrl+C |
 | `gamehost backup <name> [-keep N]` | archive `data/`, keeping the newest `N` (default 5) |
 | `gamehost restore <name> <archive>` | replace `data/` from a backup, after saving the current one |
+| `gamehost serve [--addr]` | serve the HTTP API and web panel (default `127.0.0.1:8080`) |
 | `gamehost status <name>` | report phase, pid, uptime and join information |
 | `gamehost list` | list instances |
 | `gamehost show <name>` | print the full configuration of one instance |
@@ -157,6 +160,32 @@ Passing `--port 27015` switches it to direct connections, which requires opening
 
 Flags work before or after the instance name.
 
+## Web panel
+
+```bash
+gamehost serve
+# serving http://127.0.0.1:8080
+```
+
+Open that address for a page with every instance, its phase and join id, start and stop buttons,
+and a live log. The same data is available as JSON and server-sent events:
+
+| Endpoint | Behavior |
+| --- | --- |
+| `GET /api/instances` | every instance with its resolved phase |
+| `GET /api/instances/{name}` | one instance with its resolved phase |
+| `POST /api/instances/{name}/start` | start in the background, return once it runs |
+| `POST /api/instances/{name}/stop` | stop with the usual grace period |
+| `GET /api/instances/{name}/logs?tail=N` | log stream as server-sent events (default 100 lines) |
+
+```bash
+curl -s http://127.0.0.1:8080/api/instances
+curl -N http://127.0.0.1:8080/api/instances/corekeeper/logs?tail=50
+```
+
+The panel binds to loopback and has no authentication. Use `--addr` only behind a reverse proxy
+that adds its own access control.
+
 ## How it works
 
 ```mermaid
@@ -166,21 +195,26 @@ graph TD
     B --> D["internal/corekeeper"]
     B --> E["internal/steamcmd"]
     B --> F["internal/doctor"]
+    B --> I["internal/httpapi"]
     C --> G["internal/store"]
     D --> H["internal/process"]
     E --> H
+    I --> G
+    I --> H
 ```
 
 | Package | Responsibility |
 | --- | --- |
 | `internal/app` | argument parsing, command dispatch, exit codes |
 | `internal/instance` | domain model, defaults and invariants |
-| `internal/store` | instance configuration, runtime state, atomic writes |
+| `internal/store` | instance configuration and runtime state |
+| `internal/atomicfile` | replace a file atomically, never leaving a partial copy |
 | `internal/process` | process group, signals, grace period, exit codes |
 | `internal/logs` | newest-log lookup, tail ring buffer, follow loop |
 | `internal/corekeeper` | launch arguments and join information |
 | `internal/steamcmd` | locating and running SteamCMD |
 | `internal/doctor` | environment probes |
+| `internal/httpapi` | JSON API, SSE log stream and embedded panel |
 | `internal/home` | data directory resolution |
 
 Server lifecycle:

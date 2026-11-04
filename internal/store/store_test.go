@@ -3,7 +3,6 @@ package store
 import (
 	"errors"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/syberfoxx/gamehost/internal/instance"
@@ -90,35 +89,5 @@ func TestStoreList(t *testing.T) {
 	}
 	if len(got) != 2 || got[0].Name != "alpha" || got[1].Name != "zeta" {
 		t.Errorf("List() = %+v, want alpha then zeta", got)
-	}
-}
-
-// covers atomic replacement and leftover temp cleanup
-func TestWriteFileAtomic(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "state.json")
-
-	for _, content := range []string{"first", "second"} {
-		if err := writeFileAtomic(path, []byte(content), 0o644); err != nil {
-			t.Fatalf("writeFileAtomic(%q) error = %v", content, err)
-		}
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "second" {
-		t.Errorf("file = %q, want %q", data, "second")
-	}
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 {
-		t.Errorf("directory holds %d entries, want only the target file", len(entries))
 	}
 }

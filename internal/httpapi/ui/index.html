@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gamehost</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 1.5rem; font: 15px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; background: #12141a; color: #d7dbe3; }
+  h1 { margin: 0 0 1.25rem; font-size: 1rem; letter-spacing: .12em; text-transform: uppercase; color: #8a93a5; }
+  h2 { margin: 0 0 .5rem; font-size: .8rem; letter-spacing: .08em; text-transform: uppercase; color: #8a93a5; }
+  ul { display: grid; gap: .75rem; margin: 0 0 1.5rem; padding: 0; list-style: none; }
+  li { border: 1px solid #2a2f3a; border-radius: 8px; padding: .7rem .9rem; background: #171a21; }
+  .row { display: flex; flex-wrap: wrap; align-items: baseline; gap: .6rem; }
+  .name { font-weight: 700; }
+  .meta { color: #8a93a5; font-size: .8rem; }
+  .phase { padding: 0 .4rem; border-radius: 4px; font-size: .78rem; background: #2a2f3a; }
+  .phase.running, .phase.starting { background: #1d4730; color: #7ee2a0; }
+  .phase.crashed { background: #4a2024; color: #ff9b9b; }
+  .phase.stopping { background: #4a3d1d; color: #f0d489; }
+  button { font: inherit; font-size: .78rem; padding: .18rem .6rem; color: inherit; background: #21262f; border: 1px solid #39404d; border-radius: 6px; cursor: pointer; }
+  button:hover:enabled { background: #2b323d; }
+  button:disabled { opacity: .4; cursor: default; }
+  .actions { margin-left: auto; display: flex; gap: .4rem; }
+  pre { height: 45vh; margin: 0; padding: .8rem; overflow: auto; white-space: pre-wrap; word-break: break-word; background: #0b0d11; border: 1px solid #2a2f3a; border-radius: 8px; }
+  #error { color: #ff9b9b; }
+</style>
+</head>
+<body>
+<h1>gamehost</h1>
+<p id="error" hidden></p>
+<ul id="instances"></ul>
+<h2>log <span id="log-name" class="meta"></span></h2>
+<pre id="log">select an instance to follow its log</pre>
+
+<script>
+const list = document.getElementById('instances');
+const logView = document.getElementById('log');
+const logName = document.getElementById('log-name');
+const errorView = document.getElementById('error');
+let stream = null;
+let selected = '';
+
+// show the last failure above the table
+function fail(message) {
+  errorView.textContent = message;
+  errorView.hidden = false;
+}
+
+// call one JSON endpoint and surface its error message
+async function call(path, method = 'GET') {
+  const res = await fetch(path, { method });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || res.statusText);
+  return body;
+}
+
+// follow the log of one instance over server-sent events
+function follow(name) {
+  if (selected === name) return;
+  selected = name;
+  logName.textContent = name;
+  logView.textContent = '';
+  if (stream) stream.close();
+  stream = new EventSource('/api/instances/' + name + '/logs?tail=200');
+  stream.onmessage = (event) => {
+    logView.textContent += event.data + '\n';
+    logView.scrollTop = logView.scrollHeight;
+  };
+}
+
+// run a lifecycle action and refresh the table
+async function act(name, action) {
+  try {
+    errorView.hidden = true;
+    await call('/api/instances/' + name + '/' + action, 'POST');
+    await refresh();
+  } catch (err) {
+    fail(err.message);
+  }
+}
+
+// draw one card per instance
+function render(instances) {
+  list.replaceChildren();
+  if (instances.length === 0) {
+    const empty = document.createElement('li');
+    empty.className = 'meta';
+    empty.textContent = 'no instances yet, create one with: gamehost create <name>';
+    list.append(empty);
+    return;
+  }
+
+  for (const inst of instances) {
+    const item = document.createElement('li');
+
+    const row = document.createElement('div');
+    row.className = 'row';
+
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = inst.name;
+    row.append(name);
+
+    const phase = document.createElement('span');
+    phase.className = 'phase ' + inst.phase;
+    phase.textContent = inst.phase;
+    row.append(phase);
+
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = [
+      inst.pid ? 'pid ' + inst.pid : '',
+      inst.uptime || '',
+      inst.game_id ? 'id ' + inst.game_id : '',
+      inst.world,
+      inst.max_players + ' players',
+      inst.port ? inst.network + ':' + inst.port : inst.network,
+    ].filter(Boolean).join(' · ');
+    row.append(meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+
+    const start = document.createElement('button');
+    start.textContent = 'start';
+    start.disabled = inst.phase !== 'stopped' && inst.phase !== 'crashed';
+    start.onclick = () => act(inst.name, 'start');
+
+    const stop = document.createElement('button');
+    stop.textContent = 'stop';
+    stop.disabled = inst.phase === 'stopped';
+    stop.onclick = () => act(inst.name, 'stop');
+
+    const log = document.createElement('button');
+    log.textContent = 'log';
+    log.onclick = () => follow(inst.name);
+
+    actions.append(start, stop, log);
+    row.append(actions);
+    item.append(row);
+    list.append(item);
+  }
+}
+
+// reload the table, keeping the last error visible
+async function refresh() {
+  try {
+    render(await call('/api/instances'));
+  } catch (err) {
+    fail(err.message);
+  }
+}
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

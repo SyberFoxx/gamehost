@@ -6,9 +6,9 @@ The project doubles as a learning vehicle: every milestone introduces a Go conce
 program needs (process control, signals, concurrency, `net/http`, tests with `-race`), instead of
 synthetic exercises.
 
-**Status:** M0–M5 implemented (`doctor`, instance model and store, `install`/`update`,
+**Status:** M0–M6 implemented (`doctor`, instance model and store, `install`/`update`,
 `start`/`status` with join information, `start --detach`, `stop`, `logs`/`logs -f`,
-`backup`/`restore`). M6 is next.
+`backup`/`restore`, `serve` with the HTTP API and panel). M7 is next.
 
 ## 1. Goals and non-goals
 
@@ -91,18 +91,21 @@ graph TD
     B --> D["internal/corekeeper"]
     B --> E["internal/steamcmd"]
     B --> F["internal/backup"]
-    B --> G["internal/httpapi (M6)"]
+    B --> G["internal/httpapi"]
     C --> H["internal/store"]
     D --> I["internal/process"]
     E --> I
     I --> J["internal/logs"]
+    G --> H
     G --> I
+    G --> J
 ```
 
 | Package | Responsibility | Introduced |
 | --- | --- | --- |
 | `internal/app` | parse args, dispatch commands, own exit codes | M0 |
-| `internal/store` | load/save instance config and runtime state (JSON, atomic write) | M2 |
+| `internal/store` | load/save instance config and runtime state | M2 |
+| `internal/atomicfile` | replace a file atomically through a temp file and rename | M2 |
 | `internal/instance` | domain model and validation | M2 |
 | `internal/process` | supervise one OS process: start, signal, wait, state | M3 |
 | `internal/logs` | log file plus in-memory ring buffer and subscribers | M4 |
@@ -251,6 +254,33 @@ Tradeoffs accepted:
 - PID reuse can fool the liveness check. The window is small and the consequence is refusing to
   start or stopping an unrelated process; a stronger scheme would store the process start time.
 
+### HTTP API
+
+`serve` exposes the lifecycle the CLI already drives, on loopback by default:
+
+| Endpoint | Behavior |
+| --- | --- |
+| `GET /` | embedded panel |
+| `GET /api/instances` | every instance with its resolved phase |
+| `GET /api/instances/{name}` | one instance with its resolved phase |
+| `POST /api/instances/{name}/start` | start in the background, return once it runs |
+| `POST /api/instances/{name}/stop` | stop with the same grace period as `stop` |
+| `GET /api/instances/{name}/logs?tail=N` | server-sent events, replaying the last `N` lines (default 100) |
+
+Why this shape:
+
+- **The API is a front end, not a second implementation.** Handlers delegate start and stop to the
+  same helpers the CLI uses, so phases, grace periods and error messages cannot drift apart.
+- **Loopback by default, no authentication.** A manager that can stop a server should not be
+  reachable from the network by default; `--addr` is opt-in and a reverse proxy that adds
+  authentication is the way to expose it.
+- **SSE instead of WebSockets.** The log stream is one-way text; `text/event-stream` needs no
+  handshake, retries in the browser and reuses `logs.Follow` unchanged.
+- **The panel is embedded.** `//go:embed` keeps `gamehost serve` a single binary with no asset
+  directory to deploy.
+- **Graceful shutdown.** `SIGINT` stops accepting requests, waits five seconds and then closes
+  the log streams that outlive the grace period.
+
 ## 7. Milestones
 
 | # | Deliverable | Acceptance | Go concepts |
@@ -312,3 +342,6 @@ Each milestone is one work unit: code, tests and doc updates in the same commit.
   path; the extractor refuses anything that is not local to the restore directory.
 - **One root directory.** All mutable state under `GAMEHOST_HOME`, so the repository stays clean
   and backups are a single path.
+- **The HTTP API shares the CLI lifecycle.** The panel and the terminal must not disagree about a
+  phase or a grace period, so both call the same start and stop helpers instead of a parallel
+  implementation.

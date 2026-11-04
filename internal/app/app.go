@@ -7,6 +7,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +19,7 @@ import (
 	"github.com/syberfoxx/gamehost/internal/corekeeper"
 	"github.com/syberfoxx/gamehost/internal/doctor"
 	"github.com/syberfoxx/gamehost/internal/home"
+	"github.com/syberfoxx/gamehost/internal/httpapi"
 	"github.com/syberfoxx/gamehost/internal/instance"
 	"github.com/syberfoxx/gamehost/internal/logs"
 	"github.com/syberfoxx/gamehost/internal/process"
@@ -48,6 +51,7 @@ commands:
   list      list instances
   logs      print or follow the newest log of an instance
   restore   replace the world data from a backup
+  serve     serve the HTTP API and web panel
   show      print one instance
   start     run a server, in the foreground or with --detach
   stop      stop a running server
@@ -65,6 +69,9 @@ logs flags:
 
 backup flags:
   -keep N   backups to keep, oldest removed first (default 5)
+
+serve flags:
+  --addr ADDR  listen address (default 127.0.0.1:8080)
 `
 
 // Run executes one command and returns its error.
@@ -95,6 +102,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runBackup(args[1:], stdout, stderr)
 	case "restore":
 		return runRestore(args[1:], stdout, stderr)
+	case "serve":
+		return runServe(ctx, args[1:], stdout, stderr)
 	case "status":
 		return runStatus(args[1:], stdout, stderr)
 	case "doctor":
@@ -294,24 +303,10 @@ func runStart(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return err
 	}
 
-	// Two servers on one data directory corrupt the world, so refuse early.
-	state, err := s.LoadState(name)
+	launchArgs, logPath, err := prepareStart(s, inst)
 	if err != nil {
 		return err
 	}
-	if state.Running() && process.Alive(state.PID) {
-		return fmt.Errorf("start instance %q: %w (pid %d)", name, ErrRunning, state.PID)
-	}
-	if _, err := os.Stat(corekeeper.BinaryPath(inst.InstallDir)); err != nil {
-		return fmt.Errorf("start instance %q: server is not installed, run: gamehost install %s: %w", name, name, err)
-	}
-
-	// Validate the launch contract before a process exists.
-	launchArgs, err := corekeeper.Args(inst)
-	if err != nil {
-		return err
-	}
-	logPath := filepath.Join(s.Layout(name).Logs, time.Now().Format("2006-01-02_15-04-05")+".log")
 
 	if *detach {
 		return startDetached(s, inst, logPath, stdout)
@@ -324,6 +319,29 @@ func runStart(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	defer func() { _ = logFile.Close() }() // the process owns the descriptor until it exits
 
 	return serve(ctx, s, inst, launchArgs, io.MultiWriter(stdout, logFile), logPath, true)
+}
+
+// prepareStart validates a launch and returns its arguments and log path.
+// Two servers on one data directory corrupt the world, so it refuses early.
+func prepareStart(s *store.Store, inst instance.Instance) ([]string, string, error) {
+	state, err := s.LoadState(inst.Name)
+	if err != nil {
+		return nil, "", err
+	}
+	if state.Running() && process.Alive(state.PID) {
+		return nil, "", fmt.Errorf("start instance %q: %w (pid %d)", inst.Name, ErrRunning, state.PID)
+	}
+	if _, err := os.Stat(corekeeper.BinaryPath(inst.InstallDir)); err != nil {
+		return nil, "", fmt.Errorf("start instance %q: server is not installed, run: gamehost install %s: %w", inst.Name, inst.Name, err)
+	}
+
+	// Validate the launch contract before a process exists.
+	launchArgs, err := corekeeper.Args(inst)
+	if err != nil {
+		return nil, "", err
+	}
+	logPath := filepath.Join(s.Layout(inst.Name).Logs, time.Now().Format("2006-01-02_15-04-05")+".log")
+	return launchArgs, logPath, nil
 }
 
 // startDetached re-executes gamehost as a supervisor in a new session.
@@ -482,6 +500,11 @@ func runStop(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	return stopInstance(s, inst, stdout)
+}
+
+// stopInstance asks a running server to exit and waits for it.
+func stopInstance(s *store.Store, inst instance.Instance, stdout io.Writer) error {
 	state, err := s.LoadState(inst.Name)
 	if err != nil {
 		return err
@@ -523,6 +546,78 @@ func runStop(args []string, stdout, stderr io.Writer) error {
 
 	fmt.Fprintf(stdout, "%s stopped\n", inst.Name)
 	return nil
+}
+
+// runServe serves the HTTP API and the embedded panel until ctx is cancelled.
+func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := newFlagSet("serve", stderr)
+	addr := fs.String("addr", "127.0.0.1:8080", "listen address")
+	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
+		return usageError(err)
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("serve takes no arguments: %w", ErrUsage)
+	}
+
+	s, err := openStore()
+	if err != nil {
+		return err
+	}
+	listener, err := net.Listen("tcp", *addr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", *addr, err)
+	}
+
+	server := &http.Server{
+		Handler:           httpapi.New(s, apiControl{}),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	fmt.Fprintf(stdout, "serving http://%s\npress Ctrl+C to stop\n", listener.Addr())
+
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- server.Serve(listener) }()
+
+	select {
+	case err := <-serveErr:
+		if !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("serve: %w", err)
+		}
+		return nil
+	case <-ctx.Done():
+	}
+
+	// Let in-flight requests finish, then drop the log streams still open.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		_ = server.Close() // a stream that outlives the grace period is cut here
+	}
+	return nil
+}
+
+// apiControl adapts the CLI lifecycle to the HTTP API.
+type apiControl struct{}
+
+// Start launches one instance in the background and waits until it runs.
+func (apiControl) Start(name string) error {
+	s, inst, err := loadInstance(name)
+	if err != nil {
+		return err
+	}
+	_, logPath, err := prepareStart(s, inst)
+	if err != nil {
+		return err
+	}
+	return startDetached(s, inst, logPath, io.Discard)
+}
+
+// Stop asks one instance to exit and waits for it.
+func (apiControl) Stop(name string) error {
+	s, inst, err := loadInstance(name)
+	if err != nil {
+		return err
+	}
+	return stopInstance(s, inst, io.Discard)
 }
 
 // runBackup archives the data directory of one instance.
@@ -721,17 +816,9 @@ func runStatus(args []string, stdout, stderr io.Writer) error {
 
 	// A running phase with a dead process means the server did not shut down
 	// cleanly; a stopping phase whose process is gone finished its stop.
-	alive := false
-	if state.Running() {
-		if !process.Alive(state.PID) {
-			state.Phase = instance.PhaseCrashed
-		} else {
-			alive = true
-		}
-	}
-	if state.Phase == instance.PhaseStopping && !process.Alive(state.PID) {
-		state.Phase = instance.PhaseStopped
-	}
+	live := process.Alive(state.PID)
+	state = state.Resolve(live)
+	alive := state.Running() && live
 
 	rows := [][2]string{
 		{"instance", inst.Name},
