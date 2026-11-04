@@ -28,8 +28,8 @@ concurrency and tests with `-race`.
 | M2 | `create` / `list` / `show`: instances on disk | done |
 | M3 | `start` / `status`: process supervision, graceful shutdown | done |
 | M3b | `start --detach` / `stop`: background supervision | done |
-| M4 | `logs -f`: live output | next |
-| M5 | `backup` / `restore` | planned |
+| M4 | `logs` / `logs -f`: tail and follow | done |
+| M5 | `backup` / `restore` | next |
 | M6 | `serve`: HTTP API and web panel | planned |
 | M7 | second game driver | planned |
 
@@ -95,6 +95,7 @@ In another terminal:
 ```bash
 gamehost status corekeeper
 gamehost list
+gamehost logs corekeeper -f   # follow the server output
 gamehost stop corekeeper
 ```
 
@@ -128,6 +129,8 @@ Passing `--port 27015` switches it to direct connections, which requires opening
 | `gamehost update <name>` | re-download and validate the server files |
 | `gamehost start <name> [--detach]` | run the server, in the foreground or in the background |
 | `gamehost stop <name>` | stop a running server, waiting for a clean save |
+| `gamehost logs <name> [-n N]` | print the last `N` lines (default 100) of the newest log |
+| `gamehost logs <name> -f` | follow the log until Ctrl+C |
 | `gamehost status <name>` | report phase, pid, uptime and join information |
 | `gamehost list` | list instances |
 | `gamehost show <name>` | print the full configuration of one instance |
@@ -167,6 +170,7 @@ graph TD
 | `internal/instance` | domain model, defaults and invariants |
 | `internal/store` | instance configuration, runtime state, atomic writes |
 | `internal/process` | process group, signals, grace period, exit codes |
+| `internal/logs` | newest-log lookup, tail ring buffer, follow loop |
 | `internal/corekeeper` | launch arguments and join information |
 | `internal/steamcmd` | locating and running SteamCMD |
 | `internal/doctor` | environment probes |
@@ -219,6 +223,7 @@ The repository never contains generated data.
 | `start` opens a window | the server initializes graphics even with `-batchmode` | keep the desktop session, or run it under Xvfb |
 | `server is not installed` | `install` was never run | `gamehost install <name>` |
 | SteamCMD exits 0 but nothing installed | SteamCMD reports failures in its output | `install` verifies the binary on disk and fails when it is missing |
+| Assert dump after `stop` during startup | the world is still generating | wait for `Started session` in `gamehost logs -f` before stopping |
 | `text file busy` in tests | `fork` inherits open write descriptors | do not run write-and-exec tests in parallel |
 
 ## Development

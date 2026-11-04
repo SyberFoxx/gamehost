@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -18,6 +17,7 @@ import (
 	"github.com/syberfoxx/gamehost/internal/doctor"
 	"github.com/syberfoxx/gamehost/internal/home"
 	"github.com/syberfoxx/gamehost/internal/instance"
+	"github.com/syberfoxx/gamehost/internal/logs"
 	"github.com/syberfoxx/gamehost/internal/process"
 	"github.com/syberfoxx/gamehost/internal/steamcmd"
 	"github.com/syberfoxx/gamehost/internal/store"
@@ -44,6 +44,7 @@ commands:
   create    create a server instance
   install   download the server files of an instance
   list      list instances
+  logs      print or follow the newest log of an instance
   show      print one instance
   start     run a server, in the foreground or with --detach
   stop      stop a running server
@@ -54,6 +55,10 @@ commands:
 
 start flags:
   --detach  run the server in the background and return
+
+logs flags:
+  -f        follow the log until Ctrl+C
+  -n N      lines to print from the end (default 100)
 `
 
 // Run executes one command and returns its error.
@@ -78,6 +83,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runSupervise(ctx, args[1:], stdout, stderr)
 	case "stop":
 		return runStop(args[1:], stdout, stderr)
+	case "logs":
+		return runLogs(ctx, args[1:], stdout, stderr)
 	case "status":
 		return runStatus(args[1:], stdout, stderr)
 	case "doctor":
@@ -392,6 +399,12 @@ func serve(ctx context.Context, s *store.Store, inst instance.Instance, launchAr
 
 	res := server.WaitContext(ctx, stopGrace)
 
+	// A stop requested from another terminal is a clean stop even when the
+	// server aborts on the way out; only an unrequested failure is a crash.
+	if state, err := s.LoadState(inst.Name); err == nil && state.Phase == instance.PhaseStopping {
+		res.Stopped = true
+	}
+
 	phase := instance.PhaseStopped
 	if !res.Stopped && res.ExitCode != 0 {
 		phase = instance.PhaseCrashed
@@ -477,6 +490,13 @@ func runStop(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 
+	// Record the intent first: the supervisor reads it to tell a requested stop
+	// apart from a crash, even when the server exits with a signal.
+	state.Phase = instance.PhaseStopping
+	if err := s.SaveState(inst.Name, state); err != nil {
+		return err
+	}
+
 	fmt.Fprintf(stdout, "stopping %s (pid %d), waiting up to %s\n", inst.Name, state.PID, stopGrace)
 	if err := process.Stop(state.PID, stopGrace); err != nil {
 		return fmt.Errorf("stop instance %q: %w", inst.Name, err)
@@ -493,6 +513,42 @@ func runStop(args []string, stdout, stderr io.Writer) error {
 
 	fmt.Fprintf(stdout, "%s stopped\n", inst.Name)
 	return nil
+}
+
+// runLogs prints or follows the newest log of one instance.
+func runLogs(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := newFlagSet("logs", stderr)
+	follow := fs.Bool("f", false, "follow the log until Ctrl+C")
+	lines := fs.Int("n", 100, "lines to print from the end")
+	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
+		return usageError(err)
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("logs needs exactly one instance name: %w", ErrUsage)
+	}
+
+	s, err := openStore()
+	if err != nil {
+		return err
+	}
+	inst, err := s.Load(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+
+	path, err := logs.Latest(s.Layout(inst.Name).Logs)
+	if errors.Is(err, logs.ErrNoLogs) {
+		fmt.Fprintf(stdout, "no logs yet for %s, start it first\n", inst.Name)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	if *follow {
+		return logs.Follow(ctx, stdout, path, *lines)
+	}
+	return logs.Tail(stdout, path, *lines)
 }
 
 // runStatus reports the last known state of one instance.
@@ -518,14 +574,18 @@ func runStatus(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	// A running phase with a dead process means the server did not shut down cleanly.
+	// A running phase with a dead process means the server did not shut down
+	// cleanly; a stopping phase whose process is gone finished its stop.
 	alive := false
 	if state.Running() {
-		if err := syscall.Kill(state.PID, 0); err != nil {
+		if !process.Alive(state.PID) {
 			state.Phase = instance.PhaseCrashed
 		} else {
 			alive = true
 		}
+	}
+	if state.Phase == instance.PhaseStopping && !process.Alive(state.PID) {
+		state.Phase = instance.PhaseStopped
 	}
 
 	rows := [][2]string{

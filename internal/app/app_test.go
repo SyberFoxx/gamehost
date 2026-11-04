@@ -243,3 +243,81 @@ func TestStartRefusesRunningInstance(t *testing.T) {
 		t.Errorf("start error = %v, want ErrRunning", err)
 	}
 }
+
+// covers printing the tail of the newest log
+func TestLogs(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+
+	out, err := runArgs(t, "logs", "corekeeper")
+	if err != nil {
+		t.Fatalf("logs error = %v", err)
+	}
+	if !strings.Contains(out, "no logs yet") {
+		t.Errorf("logs output = %q, want the empty message", out)
+	}
+
+	layout := store.New(os.Getenv("GAMEHOST_HOME")).Layout("corekeeper")
+	content := "booting\nworld ready\n"
+	if err := os.WriteFile(filepath.Join(layout.Logs, "2026-11-04_14-01-14.log"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err = runArgs(t, "logs", "corekeeper", "-n", "1")
+	if err != nil {
+		t.Fatalf("logs error = %v", err)
+	}
+	if out != "world ready\n" {
+		t.Errorf("logs output = %q, want only the last line", out)
+	}
+}
+
+// fieldValue returns the second column of the line whose first column is key.
+func fieldValue(out, key string) string {
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == key {
+			return fields[1]
+		}
+	}
+	return ""
+}
+
+// covers the phase transition when a stop request has no process left
+func TestStatusFinishesStalePhases(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	s := store.New(os.Getenv("GAMEHOST_HOME"))
+
+	tests := []struct {
+		name  string
+		phase instance.Phase
+		want  string
+	}{
+		{"running without a process", instance.PhaseRunning, "crashed"},
+		{"stopping without a process", instance.PhaseStopping, "stopped"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := instance.State{Phase: tt.phase, PID: 0, StartedAt: time.Now()}
+			if err := s.SaveState("corekeeper", state); err != nil {
+				t.Fatal(err)
+			}
+
+			out, err := runArgs(t, "status", "corekeeper")
+			if err != nil {
+				t.Fatalf("status error = %v", err)
+			}
+			if got := fieldValue(out, "phase"); got != tt.want {
+				t.Errorf("status phase = %q, want %q in:\n%s", got, tt.want, out)
+			}
+		})
+	}
+}

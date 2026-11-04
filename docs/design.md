@@ -6,8 +6,8 @@ The project doubles as a learning vehicle: every milestone introduces a Go conce
 program needs (process control, signals, concurrency, `net/http`, tests with `-race`), instead of
 synthetic exercises.
 
-**Status:** M0–M3b implemented (`doctor`, instance model and store, `install`/`update`,
-`start`/`status` with join information, `start --detach`, `stop`). M4 is next.
+**Status:** M0–M4 implemented (`doctor`, instance model and store, `install`/`update`,
+`start`/`status` with join information, `start --detach`, `stop`, `logs`/`logs -f`). M5 is next.
 
 ## 1. Goals and non-goals
 
@@ -259,7 +259,7 @@ Tradeoffs accepted:
 | M2 | `create`, `list`, `show` | validation rejects bad names, ports and player counts; config survives restart | structs, JSON, atomic writes, `t.TempDir` |
 | M3 | `start`, `status` | foreground run, SIGINT shutdown, crashed state detected after `kill -9`, join id reported | process groups, signals, `exec.Cmd`, timeouts |
 | M3b | `--detach`, `stop` | `start` returns, `status` sees the server, `stop` saves and exits, no orphans | re-exec, `Setsid`, process groups, `/proc` |
-| M4 | `logs` | `-f` follows live output without losing lines | `bufio.Scanner`, ring buffer, channels |
+| M4 | `logs` | `-f` follows live output without losing lines | `bufio.Scanner`, ring buffer, `ReadAt`, ticker |
 | M5 | `backup`, `restore` | archive restores into a working world | `archive/tar`, `compress/gzip`, `filepath.WalkDir` |
 | M6 | `serve` | start/stop/status from the browser, live log via SSE | `net/http`, `Server.Shutdown`, `embed` |
 | M7 | second game driver | `game.Driver` interface with two implementations | interfaces at the consumer, plugin-style layout |
@@ -274,6 +274,8 @@ Each milestone is one work unit: code, tests and doc updates in the same commit.
 - External processes are replaced by small hand-written fakes behind a 1–3 method interface.
 - `steamcmd` and the real server are exercised by a manual checklist, not by the default test
   suite; anything network or multi-gigabyte gets a `//go:build integration` tag.
+- The log follower is tested with a mutex-guarded buffer: the writer appends from the test, the
+  reader follows in another goroutine, and a bounded wait keeps the test deterministic.
 - `doctor` is the first command because it makes the environment explicit and testable.
 
 ## 9. Risks
