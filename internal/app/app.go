@@ -8,13 +8,17 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"text/tabwriter"
+	"time"
 
 	"github.com/syberfoxx/gamehost/internal/corekeeper"
 	"github.com/syberfoxx/gamehost/internal/doctor"
 	"github.com/syberfoxx/gamehost/internal/home"
 	"github.com/syberfoxx/gamehost/internal/instance"
+	"github.com/syberfoxx/gamehost/internal/process"
 	"github.com/syberfoxx/gamehost/internal/steamcmd"
 	"github.com/syberfoxx/gamehost/internal/store"
 )
@@ -36,6 +40,8 @@ commands:
   install   download the server files of an instance
   list      list instances
   show      print one instance
+  start     run a server in the foreground until Ctrl+C
+  status    report the last known state of an instance
   update    re-download the server files of an instance
   doctor    check the environment
   version   print the gamehost version
@@ -57,6 +63,10 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runList(args[1:], stdout, stderr)
 	case "show":
 		return runShow(args[1:], stdout, stderr)
+	case "start":
+		return runStart(ctx, args[1:], stdout, stderr)
+	case "status":
+		return runStatus(args[1:], stdout, stderr)
 	case "doctor":
 		return runDoctor(stdout)
 	case "version":
@@ -227,6 +237,143 @@ func runShow(args []string, stdout, stderr io.Writer) error {
 		{"password", orDefault(inst.Network.Password, "(none)")},
 		{"game id", orDefault(inst.GameID, "(generated on first start)")},
 	}
+	for _, row := range rows {
+		fmt.Fprintf(tw, "%s\t%s\n", row[0], row[1])
+	}
+	return tw.Flush()
+}
+
+// runStart runs a server in the foreground until the context ends.
+func runStart(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	const stopGrace = 20 * time.Second
+
+	fs := newFlagSet("start", stderr)
+	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
+		return usageError(err)
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("start needs exactly one instance name: %w", ErrUsage)
+	}
+	name := fs.Arg(0)
+
+	s, err := openStore()
+	if err != nil {
+		return err
+	}
+	inst, err := s.Load(name)
+	if err != nil {
+		return err
+	}
+	binary := corekeeper.BinaryPath(inst.InstallDir)
+	if _, err := os.Stat(binary); err != nil {
+		return fmt.Errorf("start instance %q: server is not installed, run: gamehost install %s: %w", name, name, err)
+	}
+
+	launchArgs, err := corekeeper.Args(inst)
+	if err != nil {
+		return err
+	}
+
+	logPath := filepath.Join(s.Layout(name).Logs, time.Now().Format("2006-01-02_15-04-05")+".log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("open log %q: %w", logPath, err)
+	}
+	defer func() { _ = logFile.Close() }() // the process owns the descriptor until it exits
+
+	server, err := process.Start(process.Spec{
+		Path: binary,
+		Args: launchArgs,
+		Dir:  inst.InstallDir,
+		Out:  io.MultiWriter(stdout, logFile),
+	})
+	if err != nil {
+		return fmt.Errorf("start instance %q: %w", name, err)
+	}
+
+	startedAt := time.Now()
+	if err := s.SaveState(name, instance.State{
+		Phase:     instance.PhaseRunning,
+		PID:       server.PID(),
+		StartedAt: startedAt,
+	}); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(stdout, "started %s (pid %d), logs at %s\npress Ctrl+C to stop\n\n", name, server.PID(), logPath)
+
+	res := server.WaitContext(ctx, stopGrace)
+
+	phase := instance.PhaseStopped
+	if !res.Stopped && res.ExitCode != 0 {
+		phase = instance.PhaseCrashed
+	}
+	if err := s.SaveState(name, instance.State{
+		Phase:     phase,
+		StartedAt: startedAt,
+		ExitCode:  res.ExitCode,
+	}); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(stdout, "\n%s is %s after %s (exit %d)\n", name, phase, res.Duration.Round(time.Second), res.ExitCode)
+	if phase == instance.PhaseCrashed {
+		return fmt.Errorf("server exited with code %d, see %s", res.ExitCode, logPath)
+	}
+	return nil
+}
+
+// runStatus reports the last known state of one instance.
+func runStatus(args []string, stdout, stderr io.Writer) error {
+	fs := newFlagSet("status", stderr)
+	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
+		return usageError(err)
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("status needs exactly one instance name: %w", ErrUsage)
+	}
+
+	s, err := openStore()
+	if err != nil {
+		return err
+	}
+	inst, err := s.Load(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	state, err := s.LoadState(inst.Name)
+	if err != nil {
+		return err
+	}
+
+	// A running phase with a dead process means the server did not shut down cleanly.
+	alive := false
+	if state.Running() {
+		if err := syscall.Kill(state.PID, 0); err != nil {
+			state.Phase = instance.PhaseCrashed
+		} else {
+			alive = true
+		}
+	}
+
+	rows := [][2]string{
+		{"instance", inst.Name},
+		{"phase", string(state.Phase)},
+	}
+	if alive {
+		rows = append(rows,
+			[2]string{"pid", fmt.Sprint(state.PID)},
+			[2]string{"uptime", time.Since(state.StartedAt).Round(time.Second).String()},
+		)
+	}
+	if state.GameID != "" {
+		rows = append(rows, [2]string{"game id", state.GameID})
+	}
+	if state.Phase == instance.PhaseCrashed {
+		rows = append(rows, [2]string{"last exit", fmt.Sprint(state.ExitCode)})
+	}
+
+	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	for _, row := range rows {
 		fmt.Fprintf(tw, "%s\t%s\n", row[0], row[1])
 	}

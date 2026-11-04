@@ -9,9 +9,8 @@ Core Keeper launch contract, architecture and roadmap.
 
 ## Status
 
-Milestone M0 is done: `gamehost doctor` probes the platform, the data directory, SteamCMD and the
-display, and exits non-zero when the environment cannot run servers yet. The rest of the roadmap is
-in the design document.
+Milestones M0–M2 are done: `doctor` probes the environment, instances are created and persisted,
+and `install`/`update` download the server files with SteamCMD.
 
 ```
 $ gamehost doctor
@@ -24,6 +23,36 @@ root: /home/ramses/.local/share/gamehost
 
 environment ready
 ```
+
+## Usage
+
+```bash
+gamehost create corekeeper --max-players 5 --world-name "Cueva Compartida"
+gamehost list
+gamehost show corekeeper
+gamehost install corekeeper
+gamehost start corekeeper     # foreground, Ctrl+C stops it
+gamehost status corekeeper    # from another terminal
+```
+
+`create` accepts flags before or after the instance name. Without `--port` the server uses the
+Steam relay (no port forwarding); setting `--port` switches it to direct connections.
+
+```
+$ gamehost list
+NAME        GAME        PLAYERS  NETWORK  WORLD
+corekeeper  corekeeper  5        sdr      Cueva Compartida
+
+$ gamehost status corekeeper
+instance  corekeeper
+phase     running
+pid       4183021
+uptime    1m20s
+```
+
+`start` runs the server in the foreground, tees its output to `logs/<timestamp>.log`, and records
+the phase in `state.json`. Ctrl+C sends `SIGTERM` to the whole process group, waits up to 20
+seconds, then escalates to `SIGKILL`.
 
 ## Requirements
 

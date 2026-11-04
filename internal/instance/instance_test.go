@@ -139,7 +139,7 @@ func TestValidate(t *testing.T) {
 		{"valid", func(i Instance) Instance { return i }, false},
 		{"short game id", func(i Instance) Instance { i.GameID = "abc"; return i }, true},
 		{"game id with dash", func(i Instance) Instance { i.GameID = "abc-def-1234567890"; return i }, true},
-		{"valid game id", func(i Instance) Instance { i.GameID = "abcdef1234567890"; return i }, false},
+		{"valid game id", func(i Instance) Instance { i.GameID = "abcdef1234567891"; return i }, false},
 		{"long password", func(i Instance) Instance { i.Network.Password = strings.Repeat("x", 29); return i }, true},
 		{"sdr with port", func(i Instance) Instance { i.Network.Port = 27015; return i }, true},
 		{"direct without port", func(i Instance) Instance { i.Network.Mode = NetworkDirect; return i }, true},

@@ -14,7 +14,10 @@ import (
 	"github.com/syberfoxx/gamehost/internal/instance"
 )
 
-const instanceFile = "instance.json"
+const (
+	instanceFile = "instance.json"
+	stateFile    = "state.json"
+)
 
 var (
 	// ErrExists reports an instance whose directory is already present.
@@ -149,6 +152,40 @@ func (s *Store) List() ([]instance.Instance, error) {
 // configPath returns the configuration file of one instance.
 func (s *Store) configPath(name string) string {
 	return filepath.Join(s.Layout(name).Root, instanceFile)
+}
+
+// SaveState writes the runtime state of one instance.
+func (s *Store) SaveState(name string, state instance.State) error {
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode state of %q: %w", name, err)
+	}
+	data = append(data, '\n')
+
+	path := filepath.Join(s.Layout(name).Root, stateFile)
+	if err := writeFileAtomic(path, data, 0o644); err != nil {
+		return fmt.Errorf("save state of %q: %w", name, err)
+	}
+	return nil
+}
+
+// LoadState reads the runtime state of one instance.
+// A missing state file means the server was never started, so it reports stopped.
+func (s *Store) LoadState(name string) (instance.State, error) {
+	path := filepath.Join(s.Layout(name).Root, stateFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return instance.State{Phase: instance.PhaseStopped}, nil
+		}
+		return instance.State{}, fmt.Errorf("read %q: %w", path, err)
+	}
+
+	var state instance.State
+	if err := json.Unmarshal(data, &state); err != nil {
+		return instance.State{}, fmt.Errorf("decode %q: %w", path, err)
+	}
+	return state, nil
 }
 
 // writeFileAtomic replaces path with data, never leaving a partial file.

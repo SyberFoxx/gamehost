@@ -4,7 +4,7 @@
 
 `gamehost` is a terminal-first manager for dedicated game servers, written in Go 1.26.
 First supported game: Core Keeper (Steam app `1963720`).
-Module path: `gamehost` (local; change it once the repository has a public URL).
+Module path: `github.com/syberfoxx/gamehost`.
 Entry point: `cmd/gamehost`. Design and roadmap: `docs/design.md`.
 
 ## Commands
@@ -48,6 +48,13 @@ Entry point: `cmd/gamehost`. Design and roadmap: `docs/design.md`.
 
 ## Known traps
 
+- `-worldmode` takes names (`Normal`, `Hard`, `Creative`, `Casual`); `ServerConfig.json` stores
+  numbers. Never pass the number to the flag.
+- Game IDs are 15–28 alphanumeric characters that exclude `Y`, `y`, `x`, `0` and `O`.
+- `GameInfo.txt` and `GameID.txt` live in the install directory, not in the data directory.
+- World saves are `<datapath>/worlds/<index>.world.gzip`; the server also writes
+  `ServerConfig.json`, `Admins.json` and `PlayerBans.json` there, with `.pugbackup` copies.
+- The server needs a graphics display even with `-batchmode`: on a desktop it opens a window.
 - SteamCMD ships a 32-bit client (`linux32/steamcmd`); a minimal distribution without 32-bit
   runtime libraries fails before reaching its prompt.
 - SteamCMD self-updates on every invocation; do not treat output as silence or assume fast startup.
@@ -55,5 +62,3 @@ Entry point: `cmd/gamehost`. Design and roadmap: `docs/design.md`.
 - World data lives under `-datapath`, not next to the binary. Back up that directory.
 - Setting `-port` switches the server from Steam relay (SDR) to direct connect and requires
   port forwarding; leave it unset for a small friend group.
-- App `1007` provides Steam client libraries; the launch environment may need
-  `steamcmd/linux64` in `LD_LIBRARY_PATH`.

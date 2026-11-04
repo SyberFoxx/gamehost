@@ -6,6 +6,8 @@ The project doubles as a learning vehicle: every milestone introduces a Go conce
 program needs (process control, signals, concurrency, `net/http`, tests with `-race`), instead of
 synthetic exercises.
 
+**Status:** M0–M2 implemented (`doctor`, instance model and store, `install`/`update`). M3 is next.
+
 ## 1. Goals and non-goals
 
 **Goals (MVP)**
@@ -26,8 +28,10 @@ synthetic exercises.
 
 ## 2. Verified facts about the Core Keeper dedicated server
 
-Source: [`escapingnetwork/core-keeper-dedicated`](https://github.com/escapingnetwork/core-keeper-dedicated)
-(the widely used container image), which encodes the real launch contract of the Linux server.
+Primary source: the `ARGUMENTS.txt` and launch scripts shipped **inside the game files**
+(`CoreKeeperServer` install directory), which are authoritative. Secondary source:
+[`escapingnetwork/core-keeper-dedicated`](https://github.com/escapingnetwork/core-keeper-dedicated),
+the widely used container image.
 
 | Fact | Value |
 | --- | --- |
@@ -35,21 +39,28 @@ Source: [`escapingnetwork/core-keeper-dedicated`](https://github.com/escapingnet
 | Companion app installed by the image | `1007` (Steam client libraries, loaded from `steamcmd/linux64`) |
 | Steam login | `anonymous` |
 | Binary | `CoreKeeperServer` in the install directory, run with that directory as cwd |
-| Game ID file | `GameID.txt` written next to the binary; `GameInfo.txt` also appears |
-| World data | directory passed with `-datapath`, separate from program files |
-| Player count | store copy says 1–8 players; the image defaults `MAX_PLAYERS=10` |
+| Join credentials | `GameInfo.txt` next to the binary, containing `GameID: <id>`; `GameID.txt` also appears |
+| Session log line | `Started session with info: <id>` |
+| World data | directory passed with `-datapath`; without it, a `DedicatedServer` subfolder of the normal save location |
+| Files inside `-datapath` | `ServerConfig.json`, `Admins.json`, `mods/`, `modloader/`, world saves |
+| Player count | default `8`; the shipped guide warns that raising it may make sessions unstable |
 
-Launch flags (all optional, space-separated):
+Launch flags:
 
 ```
--batchmode -logfile <path> -world <index> -worldname <name> -worldseed <seed>
--worldmode <0|1|2|4> -hashedworldseed <hash> -gameid <id> -datapath <dir>
--maxplayers <n> -season <n> -ip <addr> -port <port> -password <pw>
--allowonlyplatform <1|2|3|4> -activatecontent <list> -activateallcontent
+-batchmode -logfile <path> -world <0-29> -worldname <name> -worldseed <seed>
+-worldmode <Normal|Hard|Creative|Casual> -hashedworldseed <uint32> -gameid <id>
+-datapath <dir> -maxplayers <n> -season <name> -ip <addr> -port <port>
+-password <pw> -allowonlyplatform <Steam|Epic|Microsoft|GOG>
+-activatecontent <list> -activateallcontent
 ```
 
-World modes: normal `0`, hard `1`, creative `2`, casual `4`.
-Game ID: 15–28 alphanumeric characters; empty means the server generates one and writes `GameID.txt`.
+Corrections found by reading the shipped guide instead of the container recipe:
+
+- `-worldmode` takes **names**, not numbers. `ServerConfig.json` stores numbers; the flag does not.
+- Game IDs are alphanumeric but **must not contain `Y`, `y`, `x`, `0` or `O`**, 15–28 characters.
+- `-ip` has no effect without `-port`, and `-allowonlyplatform` only applies to direct connections.
+- `-logfile /dev/stdout` works: the server writes everything to stdout, so the manager can tee it.
 
 Network modes:
 
@@ -57,13 +68,17 @@ Network modes:
   friend group.
 - **Direct connect** (`-port` set): lower latency, requires opening and forwarding UDP ports.
 
-Open questions to validate empirically in M1/M3:
+Validated by running it on this machine:
 
-1. Whether app `1007` must land in the install directory or only in the SteamCMD `linux64` folder,
-   and what `LD_LIBRARY_PATH` the native binary needs.
-2. Whether the native binary really needs an X display with `-batchmode` (the image runs Xvfb; this
-   workstation has `DISPLAY=:0`, so it should not).
-3. Exact on-disk layout inside `-datapath` (backups tar the whole directory either way).
+- The binary starts with `-batchmode` and no `-nographics`; it initializes graphics and opens a
+  window on the desktop display. The official script runs it under Xvfb, so a display is expected.
+- No missing shared libraries: the launch needs neither app `1007` nor a custom `LD_LIBRARY_PATH`
+  when the desktop session provides the graphics stack.
+
+Still open:
+
+1. Whether running under Xvfb is worth it to hide the window on a desktop host.
+2. Exact save-file layout inside `-datapath` once a world finishes generating.
 
 ## 3. Architecture
 

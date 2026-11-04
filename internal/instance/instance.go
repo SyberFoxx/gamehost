@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // GameCoreKeeper is the only supported game for now.
@@ -28,9 +29,11 @@ const (
 var ErrInvalid = errors.New("invalid instance")
 
 var (
-	namePattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
-	gameIDPattern = regexp.MustCompile(`^[A-Za-z0-9]+$`)
+	namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 )
+
+// forbiddenGameIDChars are the characters the server rejects in a game ID.
+const forbiddenGameIDChars = "Yyx0O"
 
 // Mode is a Core Keeper world difficulty.
 type Mode string
@@ -50,6 +53,22 @@ func ParseMode(value string) (Mode, error) {
 		return Mode(value), nil
 	}
 	return "", fmt.Errorf("unknown world mode %q (want normal, hard, creative or casual): %w", value, ErrInvalid)
+}
+
+// ServerName returns the value the dedicated server expects for this mode.
+func (m Mode) ServerName() string {
+	switch m {
+	case ModeNormal:
+		return "Normal"
+	case ModeHard:
+		return "Hard"
+	case ModeCreative:
+		return "Creative"
+	case ModeCasual:
+		return "Casual"
+	default:
+		return ""
+	}
 }
 
 // World describes the world the server loads.
@@ -166,8 +185,9 @@ func (i Instance) Validate() error {
 	if len(i.Network.Password) > maxPasswordLen {
 		return fmt.Errorf("password is longer than %d characters: %w", maxPasswordLen, ErrInvalid)
 	}
+	// Game IDs are alphanumeric and skip characters that are easy to confuse.
 	if i.GameID != "" && !validGameID(i.GameID) {
-		return fmt.Errorf("game id %q must be %d-%d alphanumeric characters: %w", i.GameID, minGameIDLen, maxGameIDLen, ErrInvalid)
+		return fmt.Errorf("game id %q must be %d-%d characters without Y, y, x, 0 or O: %w", i.GameID, minGameIDLen, maxGameIDLen, ErrInvalid)
 	}
 	return nil
 }
@@ -191,5 +211,14 @@ func (n Network) validate() error {
 
 // validGameID reports whether id matches the server's accepted format.
 func validGameID(id string) bool {
-	return len(id) >= minGameIDLen && len(id) <= maxGameIDLen && gameIDPattern.MatchString(id)
+	if len(id) < minGameIDLen || len(id) > maxGameIDLen {
+		return false
+	}
+	for _, r := range id {
+		isAlphanumeric := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
+		if !isAlphanumeric || strings.ContainsRune(forbiddenGameIDChars, r) {
+			return false
+		}
+	}
+	return true
 }

@@ -83,6 +83,14 @@ func TestCreateListShow(t *testing.T) {
 		}
 	}
 
+	out, err = runArgs(t, "status", "corekeeper")
+	if err != nil {
+		t.Fatalf("status error = %v", err)
+	}
+	if !strings.Contains(out, "stopped") {
+		t.Errorf("status output = %q, want a stopped phase", out)
+	}
+
 	if _, err := runArgs(t, "create", "corekeeper"); !errors.Is(err, store.ErrExists) {
 		t.Errorf("second create error = %v, want ErrExists", err)
 	}
