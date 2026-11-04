@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/syberfoxx/gamehost/internal/instance"
+	"github.com/syberfoxx/gamehost/internal/process"
 	"github.com/syberfoxx/gamehost/internal/store"
 )
 
@@ -144,5 +146,100 @@ func TestCreateRejects(t *testing.T) {
 				t.Errorf("%v error = %v, want %v", tt.args, err, tt.want)
 			}
 		})
+	}
+}
+
+// covers stop when nothing is running
+func TestStopWhenIdle(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+
+	out, err := runArgs(t, "stop", "corekeeper")
+	if err != nil {
+		t.Fatalf("stop error = %v", err)
+	}
+	if !strings.Contains(out, "is not running") {
+		t.Errorf("stop output = %q", out)
+	}
+}
+
+// covers stop signalling a live server process
+func TestStopSignalsRunningServer(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+
+	script := filepath.Join(t.TempDir(), "server.sh")
+	body := "#!/bin/sh\ntrap 'exit 0' TERM\nwhile :; do sleep 0.05; done\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	server, err := process.Start(process.Spec{Path: script, Out: &bytes.Buffer{}})
+	if err != nil {
+		t.Fatalf("process.Start() error = %v", err)
+	}
+
+	s := store.New(os.Getenv("GAMEHOST_HOME"))
+	state := instance.State{Phase: instance.PhaseRunning, PID: server.PID(), StartedAt: time.Now()}
+	if err := s.SaveState("corekeeper", state); err != nil {
+		t.Fatalf("SaveState() error = %v", err)
+	}
+
+	out, err := runArgs(t, "stop", "corekeeper")
+	if err != nil {
+		t.Fatalf("stop error = %v", err)
+	}
+	if !strings.Contains(out, "stopped") {
+		t.Errorf("stop output = %q", out)
+	}
+
+	// The supervisor writes the final phase; stop must leave the same answer.
+	got, err := s.LoadState("corekeeper")
+	if err != nil {
+		t.Fatalf("LoadState() error = %v", err)
+	}
+	if got.Phase != instance.PhaseStopped || got.PID != 0 {
+		t.Errorf("state = %+v, want stopped without a pid", got)
+	}
+	_ = server.WaitContext(context.Background(), time.Second)
+}
+
+// covers refusing a second server on the same data directory
+func TestStartRefusesRunningInstance(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+
+	s := store.New(os.Getenv("GAMEHOST_HOME"))
+	layout := s.Layout("corekeeper")
+	if err := os.WriteFile(filepath.Join(layout.Files, "CoreKeeperServer"), []byte("fake"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sleeper, err := process.Start(process.Spec{Path: "/bin/sleep", Args: []string{"30"}})
+	if err != nil {
+		t.Fatalf("process.Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = process.Stop(sleeper.PID(), time.Second)
+		_ = sleeper.WaitContext(context.Background(), time.Second)
+	})
+
+	if err := s.SaveState("corekeeper", instance.State{
+		Phase:     instance.PhaseRunning,
+		PID:       sleeper.PID(),
+		StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runArgs(t, "start", "corekeeper"); !errors.Is(err, ErrRunning) {
+		t.Errorf("start error = %v, want ErrRunning", err)
 	}
 }

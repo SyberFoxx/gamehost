@@ -31,7 +31,12 @@ var (
 	ErrUsage = errors.New("usage")
 	// ErrUnhealthy reports an environment that cannot run servers yet.
 	ErrUnhealthy = errors.New("environment is not ready")
+	// ErrRunning reports an instance that already has a live server.
+	ErrRunning = errors.New("instance is already running")
 )
+
+// stopGrace is how long a server gets to save before it is killed.
+const stopGrace = 20 * time.Second
 
 const usage = `usage: gamehost <command> [flags] [name]
 
@@ -40,11 +45,15 @@ commands:
   install   download the server files of an instance
   list      list instances
   show      print one instance
-  start     run a server in the foreground until Ctrl+C
+  start     run a server, in the foreground or with --detach
+  stop      stop a running server
   status    report the last known state of an instance
   update    re-download the server files of an instance
   doctor    check the environment
   version   print the gamehost version
+
+start flags:
+  --detach  run the server in the background and return
 `
 
 // Run executes one command and returns its error.
@@ -65,6 +74,10 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runShow(args[1:], stdout, stderr)
 	case "start":
 		return runStart(ctx, args[1:], stdout, stderr)
+	case "__supervise":
+		return runSupervise(ctx, args[1:], stdout, stderr)
+	case "stop":
+		return runStop(args[1:], stdout, stderr)
 	case "status":
 		return runStatus(args[1:], stdout, stderr)
 	case "doctor":
@@ -243,11 +256,10 @@ func runShow(args []string, stdout, stderr io.Writer) error {
 	return tw.Flush()
 }
 
-// runStart runs a server in the foreground until the context ends.
+// runStart runs a server in the foreground, or hands it to a detached supervisor.
 func runStart(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	const stopGrace = 20 * time.Second
-
 	fs := newFlagSet("start", stderr)
+	detach := fs.Bool("detach", false, "run the server in the background and return")
 	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
 		return usageError(err)
 	}
@@ -264,35 +276,107 @@ func runStart(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if err != nil {
 		return err
 	}
-	binary := corekeeper.BinaryPath(inst.InstallDir)
-	if _, err := os.Stat(binary); err != nil {
+
+	// Two servers on one data directory corrupt the world, so refuse early.
+	state, err := s.LoadState(name)
+	if err != nil {
+		return err
+	}
+	if state.Running() && process.Alive(state.PID) {
+		return fmt.Errorf("start instance %q: %w (pid %d)", name, ErrRunning, state.PID)
+	}
+	if _, err := os.Stat(corekeeper.BinaryPath(inst.InstallDir)); err != nil {
 		return fmt.Errorf("start instance %q: server is not installed, run: gamehost install %s: %w", name, name, err)
 	}
 
+	// Validate the launch contract before a process exists.
 	launchArgs, err := corekeeper.Args(inst)
 	if err != nil {
 		return err
 	}
-
 	logPath := filepath.Join(s.Layout(name).Logs, time.Now().Format("2006-01-02_15-04-05")+".log")
+
+	if *detach {
+		return startDetached(s, inst, logPath, stdout)
+	}
+
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return fmt.Errorf("open log %q: %w", logPath, err)
 	}
 	defer func() { _ = logFile.Close() }() // the process owns the descriptor until it exits
 
-	server, err := process.Start(process.Spec{
-		Path: binary,
-		Args: launchArgs,
-		Dir:  inst.InstallDir,
-		Out:  io.MultiWriter(stdout, logFile),
+	return serve(ctx, s, inst, launchArgs, io.MultiWriter(stdout, logFile), logPath, true)
+}
+
+// startDetached re-executes gamehost as a supervisor in a new session.
+func startDetached(s *store.Store, inst instance.Instance, logPath string, stdout io.Writer) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve the gamehost binary: %w", err)
+	}
+
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("open log %q: %w", logPath, err)
+	}
+	defer func() { _ = logFile.Close() }() // the supervisor inherits its own descriptor
+
+	// Claim the instance before the child starts, so a concurrent start sees it.
+	if err := s.SaveState(inst.Name, instance.State{
+		Phase:     instance.PhaseStarting,
+		StartedAt: time.Now(),
+	}); err != nil {
+		return err
+	}
+
+	supervisorPID, err := process.StartDetached(process.Spec{
+		Path: exe,
+		Args: []string{"__supervise", inst.Name, "--log", logPath},
+		Out:  logFile,
 	})
 	if err != nil {
-		return fmt.Errorf("start instance %q: %w", name, err)
+		_ = s.SaveState(inst.Name, instance.State{Phase: instance.PhaseStopped})
+		return fmt.Errorf("start instance %q: %w", inst.Name, err)
+	}
+
+	// The supervisor publishes the server pid once it exists.
+	const startupWait = 15 * time.Second
+	deadline := time.Now().Add(startupWait)
+	for time.Now().Before(deadline) {
+		state, err := s.LoadState(inst.Name)
+		if err != nil {
+			return err
+		}
+		switch {
+		case state.Phase == instance.PhaseRunning && state.PID > 0:
+			fmt.Fprintf(stdout, "%s is running in the background (pid %d)\n  logs: %s\n  stop: gamehost stop %s\n",
+				inst.Name, state.PID, logPath, inst.Name)
+			return nil
+		case state.Phase == instance.PhaseCrashed:
+			return fmt.Errorf("start instance %q: the server exited during startup, see %s", inst.Name, logPath)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("start instance %q: supervisor %d did not report a server within %s, see %s",
+		inst.Name, supervisorPID, startupWait, logPath)
+}
+
+// serve starts the server and reports its lifecycle until it exits.
+// It runs in the foreground or inside the detached supervisor.
+func serve(ctx context.Context, s *store.Store, inst instance.Instance, launchArgs []string, out io.Writer, logPath string, foreground bool) error {
+	server, err := process.Start(process.Spec{
+		Path: corekeeper.BinaryPath(inst.InstallDir),
+		Args: launchArgs,
+		Dir:  inst.InstallDir,
+		Out:  out,
+	})
+	if err != nil {
+		return fmt.Errorf("start instance %q: %w", inst.Name, err)
 	}
 
 	startedAt := time.Now()
-	if err := s.SaveState(name, instance.State{
+	if err := s.SaveState(inst.Name, instance.State{
 		Phase:     instance.PhaseRunning,
 		PID:       server.PID(),
 		StartedAt: startedAt,
@@ -300,7 +384,11 @@ func runStart(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return err
 	}
 
-	fmt.Fprintf(stdout, "started %s (pid %d), logs at %s\npress Ctrl+C to stop\n\n", name, server.PID(), logPath)
+	if foreground {
+		fmt.Fprintf(out, "started %s (pid %d), logs at %s\npress Ctrl+C to stop\n\n", inst.Name, server.PID(), logPath)
+	} else {
+		fmt.Fprintf(out, "supervising %s (pid %d)\n", inst.Name, server.PID())
+	}
 
 	res := server.WaitContext(ctx, stopGrace)
 
@@ -311,7 +399,7 @@ func runStart(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	// The server writes the session id next to its binary; it is best effort
 	// because a failed launch never creates the file.
 	gameID, _ := corekeeper.ReadGameID(inst.InstallDir)
-	if err := s.SaveState(name, instance.State{
+	if err := s.SaveState(inst.Name, instance.State{
 		Phase:     phase,
 		StartedAt: startedAt,
 		ExitCode:  res.ExitCode,
@@ -320,10 +408,90 @@ func runStart(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return err
 	}
 
-	fmt.Fprintf(stdout, "\n%s is %s after %s (exit %d)\n", name, phase, res.Duration.Round(time.Second), res.ExitCode)
+	fmt.Fprintf(out, "\n%s is %s after %s (exit %d)\n", inst.Name, phase, res.Duration.Round(time.Second), res.ExitCode)
 	if phase == instance.PhaseCrashed {
 		return fmt.Errorf("server exited with code %d, see %s", res.ExitCode, logPath)
 	}
+	return nil
+}
+
+// runSupervise is the hidden half of start --detach: one instance, one session.
+func runSupervise(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := newFlagSet("__supervise", stderr)
+	logPath := fs.String("log", "", "log file used for messages")
+	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
+		return usageError(err)
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("__supervise needs exactly one instance name: %w", ErrUsage)
+	}
+
+	s, err := openStore()
+	if err != nil {
+		return err
+	}
+	inst, err := s.Load(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	launchArgs, err := corekeeper.Args(inst)
+	if err != nil {
+		return err
+	}
+	return serve(ctx, s, inst, launchArgs, stdout, *logPath, false)
+}
+
+// runStop asks a running server to exit and waits for it.
+func runStop(args []string, stdout, stderr io.Writer) error {
+	fs := newFlagSet("stop", stderr)
+	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
+		return usageError(err)
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("stop needs exactly one instance name: %w", ErrUsage)
+	}
+
+	s, err := openStore()
+	if err != nil {
+		return err
+	}
+	inst, err := s.Load(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	state, err := s.LoadState(inst.Name)
+	if err != nil {
+		return err
+	}
+
+	if !process.Alive(state.PID) {
+		// Nothing to signal; make the stored phase honest.
+		if state.Phase != instance.PhaseStopped || state.PID != 0 {
+			state.Phase = instance.PhaseStopped
+			state.PID = 0
+			if err := s.SaveState(inst.Name, state); err != nil {
+				return err
+			}
+		}
+		fmt.Fprintf(stdout, "%s is not running\n", inst.Name)
+		return nil
+	}
+
+	fmt.Fprintf(stdout, "stopping %s (pid %d), waiting up to %s\n", inst.Name, state.PID, stopGrace)
+	if err := process.Stop(state.PID, stopGrace); err != nil {
+		return fmt.Errorf("stop instance %q: %w", inst.Name, err)
+	}
+
+	// The supervisor records the same phase; writing here keeps `stop` honest
+	// when the supervisor was killed together with its terminal.
+	state.Phase = instance.PhaseStopped
+	state.PID = 0
+	state.ExitCode = -1
+	if err := s.SaveState(inst.Name, state); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(stdout, "%s stopped\n", inst.Name)
 	return nil
 }
 

@@ -95,3 +95,45 @@ func TestStartMissingBinary(t *testing.T) {
 		t.Fatal("Start() error = nil, want a failure")
 	}
 }
+
+// covers an external SIGTERM counting as a clean stop
+func TestWaitContextExternalTermIsStopped(t *testing.T) {
+	script := writeScript(t, "trap 'exit 0' TERM\nwhile :; do sleep 0.05; done")
+	server, err := Start(Spec{Path: script, Out: &bytes.Buffer{}})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	if err := Stop(server.PID(), 300*time.Millisecond); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	res := server.WaitContext(context.Background(), time.Second)
+	if !res.Stopped {
+		t.Error("Stopped = false, want true for a signal from outside")
+	}
+}
+
+// covers stopping a process group and the missing pid cases
+func TestStop(t *testing.T) {
+	script := writeScript(t, "trap 'exit 0' TERM\nwhile :; do sleep 0.05; done")
+	server, err := Start(Spec{Path: script, Out: &bytes.Buffer{}})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	if err := Stop(server.PID(), 300*time.Millisecond); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	// The parent must reap the child, otherwise it stays visible as a zombie.
+	_ = server.WaitContext(context.Background(), time.Second)
+	if Alive(server.PID()) {
+		t.Error("Alive() = true after Stop")
+	}
+	if err := Stop(server.PID(), time.Second); err != nil {
+		t.Errorf("second Stop() error = %v, want nil for a dead process", err)
+	}
+	if err := Stop(0, time.Second); err == nil {
+		t.Error("Stop(0) error = nil, want a failure")
+	}
+}

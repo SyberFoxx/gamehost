@@ -59,6 +59,13 @@ Entry point: `cmd/gamehost`. Design and roadmap: `docs/design.md`.
   runtime libraries fails before reaching its prompt.
 - SteamCMD self-updates on every invocation; do not treat output as silence or assume fast startup.
 - The server must run with its install directory as working directory; `GameID.txt` is written there.
+- `start --detach` re-executes `gamehost __supervise <name> --log <path>` with `Setsid`; stdout of
+  that child is the log file. The command is hidden on purpose and must keep working without a
+  terminal.
+- A zombie answers `kill(pid, 0)`. Liveness checks read `/proc/<pid>/stat` and treat `Z` as dead,
+  which is also why the project is Linux-only.
+- A server killed from outside by `SIGTERM`/`SIGINT` counts as a clean stop; do not report it as a
+  crash.
 - World data lives under `-datapath`, not next to the binary. Back up that directory.
 - Setting `-port` switches the server from Steam relay (SDR) to direct connect and requires
   port forwarding; leave it unset for a small friend group.

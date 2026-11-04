@@ -27,8 +27,8 @@ concurrency and tests with `-race`.
 | M1 | `install` / `update`: SteamCMD downloads | done |
 | M2 | `create` / `list` / `show`: instances on disk | done |
 | M3 | `start` / `status`: process supervision, graceful shutdown | done |
-| M3b | `start --detach` / `stop`: background supervision | next |
-| M4 | `logs -f`: live output and join information | next |
+| M3b | `start --detach` / `stop`: background supervision | done |
+| M4 | `logs -f`: live output | next |
 | M5 | `backup` / `restore` | planned |
 | M6 | `serve`: HTTP API and web panel | planned |
 | M7 | second game driver | planned |
@@ -39,13 +39,15 @@ concurrency and tests with `-race`.
 - Keeps configuration and world data outside the repository, under a single `GAMEHOST_HOME` root.
 - Validates the launch contract before touching a process: world mode names, game ID charset,
   player limits, network mode.
-- Runs the server in the foreground with a clean `SIGTERM` → grace period → `SIGKILL` shutdown.
+- Runs the server in the foreground or detached, with a clean `SIGTERM` → grace period → `SIGKILL`
+  shutdown.
+- Refuses a second server on the same world, and stops a detached one from any terminal.
 - Persists the runtime phase so another terminal can see what is happening.
 - Tees server output to both the terminal and a per-run log file.
 
 ## Requirements
 
-- Linux (the process supervisor uses POSIX process groups)
+- Linux (the supervisor uses POSIX process groups and `/proc` to detect zombies)
 - Go 1.26 or newer to build
 - SteamCMD, looked up in this order: `GAMEHOST_STEAMCMD`, `PATH`,
   `~/.local/share/steamcmd/steamcmd.sh`
@@ -79,7 +81,13 @@ environment ready
 ```bash
 gamehost create corekeeper --max-players 5 --world-name "Cueva Compartida"
 gamehost install corekeeper
-gamehost start corekeeper        # foreground server, Ctrl+C stops it
+gamehost start corekeeper --detach
+```
+
+```
+corekeeper is running in the background (pid 326296)
+  logs: /home/ramses/.local/share/gamehost/servers/corekeeper/logs/2026-11-04_14-01-14.log
+  stop: gamehost stop corekeeper
 ```
 
 In another terminal:
@@ -87,6 +95,7 @@ In another terminal:
 ```bash
 gamehost status corekeeper
 gamehost list
+gamehost stop corekeeper
 ```
 
 ```
@@ -101,6 +110,11 @@ game id   K85KQswu7GWLsQB
 `status` reads the session id the server writes to `GameInfo.txt` next to its binary, so friends can
 join with it. `start` records it in `state.json` when the run ends.
 
+`start` without flags keeps the server in the foreground with its output on the terminal; Ctrl+C
+stops it. `start --detach` hands the server to a supervisor in its own session and returns, so the
+server survives closing the terminal. `stop` signals the whole process group, waits up to 20
+seconds for a clean save, then escalates to `SIGKILL`.
+
 Without `--port` the server uses the Steam relay network, so no router configuration is needed.
 Passing `--port 27015` switches it to direct connections, which requires opening UDP ports.
 
@@ -112,7 +126,8 @@ Passing `--port 27015` switches it to direct connections, which requires opening
 | `gamehost create <name> [flags]` | create an instance and its directories |
 | `gamehost install <name>` | download the server files with SteamCMD |
 | `gamehost update <name>` | re-download and validate the server files |
-| `gamehost start <name>` | run the server in the foreground until Ctrl+C |
+| `gamehost start <name> [--detach]` | run the server, in the foreground or in the background |
+| `gamehost stop <name>` | stop a running server, waiting for a clean save |
 | `gamehost status <name>` | report phase, pid, uptime and join information |
 | `gamehost list` | list instances |
 | `gamehost show <name>` | print the full configuration of one instance |
@@ -162,8 +177,11 @@ Server lifecycle:
 ```mermaid
 stateDiagram-v2
     [*] --> stopped
+    stopped --> starting: start --detach
+    starting --> running: server process launched
+    starting --> crashed: launch failed
     stopped --> running: start
-    running --> stopped: Ctrl+C or clean exit
+    running --> stopped: Ctrl+C, stop, or clean exit
     running --> crashed: unexpected exit
     crashed --> running: start again
 ```
@@ -171,6 +189,11 @@ stateDiagram-v2
 `start` writes `state.json` before the process is reported as running, and again after it exits, so
 `status` never has to guess. If a process disappears while `state.json` still says `running`,
 `status` reports `crashed`.
+
+Detached runs re-execute the same binary as a hidden `__supervise` command in a new session. The
+supervisor owns the server process, records every phase change and outlives the terminal that
+started it. `stop` signals the server's process group; the supervisor observes the exit and writes
+the final state.
 
 ## Data layout
 
