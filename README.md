@@ -17,18 +17,19 @@ in the design document.
 $ gamehost doctor
 root: /home/ramses/.local/share/gamehost
 
-  ok    platform   linux/amd64
-  ok    data root  /home/ramses/.local/share/gamehost
-  fail  steamcmd   not found in PATH (RPM Fusion package or official tarball)
-  ok    display    :0
+  ok  platform   linux/amd64
+  ok  data root  /home/ramses/.local/share/gamehost
+  ok  steamcmd   /home/ramses/.local/share/steamcmd/steamcmd.sh
+  ok  display    :0
 
-environment is not ready
+environment ready
 ```
 
 ## Requirements
 
 - Go 1.26 or newer
-- SteamCMD for installing game server files
+- SteamCMD for installing game server files. `gamehost` looks for it in `GAMEHOST_STEAMCMD`, then
+  `PATH`, then `~/.local/share/steamcmd/steamcmd.sh`.
 - Linux with a writable data directory (`~/.local/share/gamehost` by default)
 
 ## Build and run
