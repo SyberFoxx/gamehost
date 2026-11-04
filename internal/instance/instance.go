@@ -8,8 +8,11 @@ import (
 	"strings"
 )
 
-// GameCoreKeeper is the only supported game for now.
-const GameCoreKeeper = "corekeeper"
+// Supported games.
+const (
+	GameCoreKeeper     = "corekeeper"
+	GameProjectZomboid = "projectzomboid"
+)
 
 // Network modes, matching the dedicated server behaviour.
 const (
@@ -18,11 +21,12 @@ const (
 )
 
 const (
-	maxNameLen     = 32
-	maxPlayers     = 8
-	minGameIDLen   = 15
-	maxGameIDLen   = 28
-	maxPasswordLen = 28
+	maxNameLen         = 32
+	maxPlayers         = 8
+	minGameIDLen       = 15
+	maxGameIDLen       = 28
+	maxPasswordLen     = 28
+	projectZomboidPort = 16261
 )
 
 // ErrInvalid reports a configuration that violates an invariant.
@@ -83,43 +87,67 @@ type World struct {
 type Network struct {
 	Mode     string `json:"mode"`
 	Port     int    `json:"port"`
+	UDPPort  int    `json:"udp_port,omitempty"`
 	Password string `json:"password"`
 }
 
 // Instance is one managed server.
 type Instance struct {
-	Name       string  `json:"name"`
-	Game       string  `json:"game"`
-	InstallDir string  `json:"install_dir"`
-	DataDir    string  `json:"data_dir"`
-	World      World   `json:"world"`
-	Network    Network `json:"network"`
-	MaxPlayers int     `json:"max_players"`
-	GameID     string  `json:"game_id"`
+	Name          string  `json:"name"`
+	Game          string  `json:"game"`
+	InstallDir    string  `json:"install_dir"`
+	DataDir       string  `json:"data_dir"`
+	World         World   `json:"world"`
+	Network       Network `json:"network"`
+	MaxPlayers    int     `json:"max_players"`
+	GameID        string  `json:"game_id"`
+	AdminPassword string  `json:"admin_password,omitempty"`
 }
 
 // Options carries the user-facing settings of a new instance.
 type Options struct {
-	MaxPlayers int
-	WorldName  string
-	Seed       string
-	Mode       Mode
-	Port       int
-	Password   string
-	GameID     string
-	InstallDir string
-	DataDir    string
+	Game          string
+	MaxPlayers    int
+	WorldName     string
+	Seed          string
+	Mode          Mode
+	Port          int
+	UDPPort       int
+	Password      string
+	AdminPassword string
+	GameID        string
+	InstallDir    string
+	DataDir       string
 }
 
 // New builds an instance with defaults applied and invariants checked.
 func New(name string, opts Options) (Instance, error) {
+	game := opts.Game
+	if game == "" {
+		game = GameCoreKeeper
+	}
+
 	network := Network{Mode: NetworkSDR}
-	if opts.Port > 0 {
-		// Setting a port is what switches the server to direct connections.
+	switch game {
+	case GameCoreKeeper:
+		if opts.Port > 0 {
+			// Setting a port is what switches the server to direct connections.
+			network.Mode = NetworkDirect
+			network.Port = opts.Port
+		}
+		network.Password = opts.Password
+	case GameProjectZomboid:
+		// Project Zomboid always listens on a game port and a direct port.
 		network.Mode = NetworkDirect
 		network.Port = opts.Port
+		if network.Port == 0 {
+			network.Port = projectZomboidPort
+		}
+		network.UDPPort = opts.UDPPort
+		if network.UDPPort == 0 && network.Port < 65535 {
+			network.UDPPort = network.Port + 1
+		}
 	}
-	network.Password = opts.Password
 
 	world := World{
 		Name: opts.WorldName,
@@ -128,17 +156,21 @@ func New(name string, opts Options) (Instance, error) {
 	}
 	if world.Name == "" {
 		world.Name = "Core Keeper Server"
+		if game == GameProjectZomboid {
+			world.Name = "servertest"
+		}
 	}
 
 	inst := Instance{
-		Name:       name,
-		Game:       GameCoreKeeper,
-		InstallDir: opts.InstallDir,
-		DataDir:    opts.DataDir,
-		World:      world,
-		Network:    network,
-		MaxPlayers: opts.MaxPlayers,
-		GameID:     opts.GameID,
+		Name:          name,
+		Game:          game,
+		InstallDir:    opts.InstallDir,
+		DataDir:       opts.DataDir,
+		World:         world,
+		Network:       network,
+		MaxPlayers:    opts.MaxPlayers,
+		GameID:        opts.GameID,
+		AdminPassword: opts.AdminPassword,
 	}
 	if err := inst.Validate(); err != nil {
 		return Instance{}, err
@@ -164,12 +196,21 @@ func (i Instance) Validate() error {
 	if err := ValidateName(i.Name); err != nil {
 		return err
 	}
-	if i.Game != GameCoreKeeper {
-		return fmt.Errorf("unsupported game %q: %w", i.Game, ErrInvalid)
-	}
 	if i.InstallDir == "" || i.DataDir == "" {
 		return fmt.Errorf("install and data directories are required: %w", ErrInvalid)
 	}
+	switch i.Game {
+	case GameCoreKeeper:
+		return i.validateCoreKeeper()
+	case GameProjectZomboid:
+		return i.validateProjectZomboid()
+	default:
+		return fmt.Errorf("unsupported game %q: %w", i.Game, ErrInvalid)
+	}
+}
+
+// validateCoreKeeper checks the launch contract of the Core Keeper server.
+func (i Instance) validateCoreKeeper() error {
 	if i.World.Index < 0 {
 		return fmt.Errorf("world index %d must not be negative: %w", i.World.Index, ErrInvalid)
 	}
@@ -179,15 +220,59 @@ func (i Instance) Validate() error {
 	if i.MaxPlayers < 1 || i.MaxPlayers > maxPlayers {
 		return fmt.Errorf("max players %d must be between 1 and %d: %w", i.MaxPlayers, maxPlayers, ErrInvalid)
 	}
+	if i.Network.UDPPort != 0 {
+		return fmt.Errorf("udp port %d is only used by project zomboid: %w", i.Network.UDPPort, ErrInvalid)
+	}
 	if err := i.Network.validate(); err != nil {
 		return err
 	}
 	if len(i.Network.Password) > maxPasswordLen {
 		return fmt.Errorf("password is longer than %d characters: %w", maxPasswordLen, ErrInvalid)
 	}
+	if i.AdminPassword != "" {
+		return fmt.Errorf("admin password is only used by project zomboid: %w", ErrInvalid)
+	}
 	// Game IDs are alphanumeric and skip characters that are easy to confuse.
 	if i.GameID != "" && !validGameID(i.GameID) {
 		return fmt.Errorf("game id %q must be %d-%d characters without Y, y, x, 0 or O: %w", i.GameID, minGameIDLen, maxGameIDLen, ErrInvalid)
+	}
+	return nil
+}
+
+// validateProjectZomboid checks the launch contract of the Project Zomboid server.
+func (i Instance) validateProjectZomboid() error {
+	if i.World.Index != 0 || i.World.Seed != "" || i.World.Mode != "" {
+		return fmt.Errorf("world index, seed and mode belong to core keeper: %w", ErrInvalid)
+	}
+	// The server name is also the save folder and ini name, so keep it path safe.
+	if len(i.World.Name) > maxNameLen || !namePattern.MatchString(i.World.Name) {
+		return fmt.Errorf("server name %q must be lowercase letters, digits, - or _: %w", i.World.Name, ErrInvalid)
+	}
+	// Player limits and the join password live in the server ini, not in flags.
+	if i.MaxPlayers != 0 {
+		return fmt.Errorf("max players are configured in the Project Zomboid ini, not by gamehost: %w", ErrInvalid)
+	}
+	if i.GameID != "" {
+		return fmt.Errorf("game id belongs to core keeper: %w", ErrInvalid)
+	}
+	if i.Network.Password != "" {
+		return fmt.Errorf("join password is configured in the Project Zomboid ini, not by gamehost: %w", ErrInvalid)
+	}
+	// The first start waits for an admin password unless it is passed up front.
+	if i.AdminPassword == "" {
+		return fmt.Errorf("admin password is required for project zomboid: %w", ErrInvalid)
+	}
+	if i.Network.Mode != NetworkDirect {
+		return fmt.Errorf("project zomboid always uses direct connections: %w", ErrInvalid)
+	}
+	if i.Network.Port < 1 || i.Network.Port > 65535 {
+		return fmt.Errorf("game port %d must be between 1 and 65535: %w", i.Network.Port, ErrInvalid)
+	}
+	if i.Network.UDPPort < 1 || i.Network.UDPPort > 65535 {
+		return fmt.Errorf("direct port %d must be between 1 and 65535: %w", i.Network.UDPPort, ErrInvalid)
+	}
+	if i.Network.UDPPort == i.Network.Port {
+		return fmt.Errorf("game and direct ports must differ (both %d): %w", i.Network.Port, ErrInvalid)
 	}
 	return nil
 }

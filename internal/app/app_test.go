@@ -421,3 +421,69 @@ func TestBackupRefusesRunningInstance(t *testing.T) {
 		}
 	}
 }
+
+// covers creating a Project Zomboid instance and its game-specific output
+func TestCreateProjectZomboid(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	out, err := runArgs(t, "create", "zomboid", "--game", "projectzomboid",
+		"--world-name", "base", "--admin-password", "secret")
+	if err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	if !strings.Contains(out, `created instance "zomboid"`) {
+		t.Errorf("create output = %q", out)
+	}
+
+	out, err = runArgs(t, "list")
+	if err != nil {
+		t.Fatalf("list error = %v", err)
+	}
+	for _, want := range []string{"projectzomboid", "base", "16261/16262"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("list output missing %q:\n%s", want, out)
+		}
+	}
+
+	out, err = runArgs(t, "show", "zomboid")
+	if err != nil {
+		t.Fatalf("show error = %v", err)
+	}
+	for _, want := range []string{"direct port", "16262", "admin password", "secret", "from the server ini"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("show output missing %q:\n%s", want, out)
+		}
+	}
+
+	out, err = runArgs(t, "status", "zomboid")
+	if err != nil {
+		t.Fatalf("status error = %v", err)
+	}
+	for _, want := range []string{"stopped", "join", "port 16261 UDP"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// covers rejecting flags that belong to the other game
+func TestCreateRejectsForeignFlags(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	tests := [][]string{
+		{"create", "zomboid", "--game", "projectzomboid", "--admin-password", "secret", "--max-players", "4"},
+		{"create", "zomboid", "--game", "projectzomboid", "--admin-password", "secret", "--mode", "hard"},
+		{"create", "corekeeper", "--admin-password", "secret"},
+		{"create", "corekeeper", "--udp-port", "16262"},
+	}
+
+	for _, args := range tests {
+		if _, err := runArgs(t, args...); !errors.Is(err, ErrUsage) {
+			t.Errorf("%v error = %v, want ErrUsage", args, err)
+		}
+	}
+
+	if _, err := runArgs(t, "create", "zomboid", "--game", "projectzomboid"); !errors.Is(err, instance.ErrInvalid) {
+		t.Errorf("create without an admin password error = %v, want ErrInvalid", err)
+	}
+}

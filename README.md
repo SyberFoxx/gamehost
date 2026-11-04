@@ -33,7 +33,7 @@ concurrency and tests with `-race`.
 | M4 | `logs` / `logs -f`: tail and follow | done |
 | M5 | `backup` / `restore` | done |
 | M6 | `serve`: HTTP API and web panel | done |
-| M7 | second game driver | next |
+| M7 | second game driver | done |
 
 ## Features
 
@@ -50,6 +50,7 @@ concurrency and tests with `-race`.
   previous data as a pre-restore backup.
 - Serves a small web panel and a JSON API with live status, start/stop controls and an SSE log
   stream, embedding the page in the binary.
+- Runs two games behind one driver interface: Core Keeper and Project Zomboid.
 
 ## Requirements
 
@@ -126,6 +127,17 @@ seconds for a clean save, then escalates to `SIGKILL`.
 Without `--port` the server uses the Steam relay network, so no router configuration is needed.
 Passing `--port 27015` switches it to direct connections, which requires opening UDP ports.
 
+A Project Zomboid server uses the same commands with `--game`:
+
+```bash
+gamehost create zomboid --game projectzomboid --world-name base --admin-password "cambia esto"
+gamehost install zomboid
+gamehost start zomboid --detach
+```
+
+Project Zomboid has no join code: `status` reports the UDP port to add in the Favorites tab, and
+max players and the join password stay in `data/Server/base.ini`.
+
 ## Commands
 
 | Command | Purpose |
@@ -150,13 +162,16 @@ Passing `--port 27015` switches it to direct connections, which requires opening
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--max-players` | `8` | player limit, 1–8 |
-| `--world-name` | `Core Keeper Server` | name shown to connecting players |
-| `--seed` | random | world seed, only used on first creation |
-| `--mode` | `normal` | `normal`, `hard`, `creative` or `casual` |
-| `--port` | `0` | direct-connect port; `0` keeps the Steam relay |
-| `--password` | none | direct-connect password, at most 28 characters |
-| `--game-id` | generated | fixed game ID, 15–28 characters without `Y y x 0 O` |
+| `--game` | `corekeeper` | `corekeeper` or `projectzomboid` |
+| `--max-players` | `8` | player limit, 1–8 (Core Keeper only) |
+| `--world-name` | per game | world name, or the Project Zomboid server name (lowercase letters, digits, `-` and `_`) |
+| `--seed` | random | world seed, only used on first creation (Core Keeper only) |
+| `--mode` | `normal` | `normal`, `hard`, `creative` or `casual` (Core Keeper only) |
+| `--port` | `0` | direct-connect port; `0` keeps the Steam relay (Core Keeper) or uses `16261` (Project Zomboid) |
+| `--udp-port` | game port + 1 | Project Zomboid direct port (Project Zomboid only) |
+| `--password` | none | join password, at most 28 characters (Core Keeper only) |
+| `--admin-password` | required | Project Zomboid admin password (Project Zomboid only) |
+| `--game-id` | generated | fixed game ID, 15–28 characters without `Y y x 0 O` (Core Keeper only) |
 
 Flags work before or after the instance name.
 
@@ -192,7 +207,9 @@ that adds its own access control.
 graph TD
     A["cmd/gamehost main"] --> B["internal/app"]
     B --> C["internal/instance"]
-    B --> D["internal/corekeeper"]
+    B --> J["internal/games"]
+    J --> D["internal/corekeeper"]
+    J --> K["internal/projectzomboid"]
     B --> E["internal/steamcmd"]
     B --> F["internal/doctor"]
     B --> I["internal/httpapi"]
@@ -211,7 +228,10 @@ graph TD
 | `internal/atomicfile` | replace a file atomically, never leaving a partial copy |
 | `internal/process` | process group, signals, grace period, exit codes |
 | `internal/logs` | newest-log lookup, tail ring buffer, follow loop |
-| `internal/corekeeper` | launch arguments and join information |
+| `internal/game` | driver contracts: install args, launch, join, session id |
+| `internal/games` | game name to driver registry |
+| `internal/corekeeper` | Core Keeper launch arguments and join information |
+| `internal/projectzomboid` | Project Zomboid install, launch and join information |
 | `internal/steamcmd` | locating and running SteamCMD |
 | `internal/doctor` | environment probes |
 | `internal/httpapi` | JSON API, SSE log stream and embedded panel |
@@ -265,6 +285,8 @@ The repository never contains generated data.
 | `server is not installed` | `install` was never run | `gamehost install <name>` |
 | SteamCMD exits 0 but nothing installed | SteamCMD reports failures in its output | `install` verifies the binary on disk and fails when it is missing |
 | Assert dump after `stop` during startup | the world is still generating | wait for `Started session` in `gamehost logs -f` before stopping |
+| Friends cannot join a Project Zomboid server | ports `16261` and `16262` stay UDP | forward both, and allow them in the firewall |
+| `start-server.sh: Permission denied` | SteamCMD kept the script without the execute bit | `chmod +x files/start-server.sh` |
 | `backup` or `restore` refuses to run | the server holds the world files | `gamehost stop <name>` first |
 | `text file busy` in tests | `fork` inherits open write descriptors | do not run write-and-exec tests in parallel |
 
@@ -292,6 +314,9 @@ The full design, the verified Core Keeper launch contract and the decision log l
   than a detached supervisor; `--detach` comes after the core is proven.
 - **One root directory.** All mutable state under `GAMEHOST_HOME`, so the repository stays clean and
   backups are a single path.
+- **Two games behind small interfaces.** `internal/game` holds `Installer` and `Runner`, and
+  `internal/games` resolves a game name to its driver; the CLI and the API never switch on the game
+  name to build a command line.
 
 ## License
 

@@ -112,7 +112,7 @@ function render(instances) {
     meta.textContent = [
       inst.pid ? 'pid ' + inst.pid : '',
       inst.uptime || '',
-      inst.game_id ? 'id ' + inst.game_id : '',
+      inst.join || '',
       inst.world,
       inst.max_players + ' players',
       inst.port ? inst.network + ':' + inst.port : inst.network,

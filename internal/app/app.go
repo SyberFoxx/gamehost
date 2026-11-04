@@ -16,8 +16,9 @@ import (
 	"time"
 
 	"github.com/syberfoxx/gamehost/internal/backup"
-	"github.com/syberfoxx/gamehost/internal/corekeeper"
 	"github.com/syberfoxx/gamehost/internal/doctor"
+	"github.com/syberfoxx/gamehost/internal/game"
+	"github.com/syberfoxx/gamehost/internal/games"
 	"github.com/syberfoxx/gamehost/internal/home"
 	"github.com/syberfoxx/gamehost/internal/httpapi"
 	"github.com/syberfoxx/gamehost/internal/instance"
@@ -120,13 +121,16 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 // runCreate writes a new instance configuration.
 func runCreate(args []string, stdout, stderr io.Writer) error {
 	fs := newFlagSet("create", stderr)
-	maxPlayers := fs.Int("max-players", 8, "maximum players (1-8)")
-	worldName := fs.String("world-name", "", "world name shown to players")
-	seed := fs.String("seed", "", "world seed, empty means random")
-	mode := fs.String("mode", "normal", "world mode: normal, hard, creative or casual")
-	port := fs.Int("port", 0, "direct-connect port, 0 keeps the Steam relay")
-	password := fs.String("password", "", "direct-connect password, at most 28 characters")
-	gameID := fs.String("game-id", "", "fixed game ID, 15-28 alphanumeric characters")
+	gameName := fs.String("game", instance.GameCoreKeeper, "game: corekeeper or projectzomboid")
+	maxPlayers := fs.Int("max-players", 8, "maximum players, 1-8 (corekeeper only)")
+	worldName := fs.String("world-name", "", "world or server name shown to players")
+	seed := fs.String("seed", "", "world seed, empty means random (corekeeper only)")
+	mode := fs.String("mode", "normal", "world mode: normal, hard, creative or casual (corekeeper only)")
+	port := fs.Int("port", 0, "game port; 0 keeps the relay (corekeeper) or uses 16261 (projectzomboid)")
+	udpPort := fs.Int("udp-port", 0, "direct-connect port (projectzomboid only), default game port + 1")
+	password := fs.String("password", "", "join password, at most 28 characters (corekeeper only)")
+	adminPassword := fs.String("admin-password", "", "admin password (projectzomboid only)")
+	gameID := fs.String("game-id", "", "fixed game ID, 15-28 alphanumeric characters (corekeeper only)")
 	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
 		return usageError(err)
 	}
@@ -138,27 +142,50 @@ func runCreate(args []string, stdout, stderr io.Writer) error {
 	if err := instance.ValidateName(name); err != nil {
 		return err
 	}
-	worldMode, err := instance.ParseMode(*mode)
-	if err != nil {
-		return err
-	}
 	s, err := openStore()
 	if err != nil {
 		return err
 	}
 
 	layout := s.Layout(name)
-	inst, err := instance.New(name, instance.Options{
-		MaxPlayers: *maxPlayers,
+	opts := instance.Options{
+		Game:       *gameName,
 		WorldName:  *worldName,
-		Seed:       *seed,
-		Mode:       worldMode,
-		Port:       *port,
-		Password:   *password,
-		GameID:     *gameID,
 		InstallDir: layout.Files,
 		DataDir:    layout.Data,
-	})
+	}
+	set := setFlags(fs)
+	switch *gameName {
+	case instance.GameCoreKeeper:
+		for _, name := range []string{"udp-port", "admin-password"} {
+			if set[name] {
+				return fmt.Errorf("create: --%s is only used by projectzomboid: %w", name, ErrUsage)
+			}
+		}
+		worldMode, err := instance.ParseMode(*mode)
+		if err != nil {
+			return err
+		}
+		opts.MaxPlayers = *maxPlayers
+		opts.Mode = worldMode
+		opts.Seed = *seed
+		opts.Port = *port
+		opts.Password = *password
+		opts.GameID = *gameID
+	case instance.GameProjectZomboid:
+		for _, name := range []string{"max-players", "seed", "mode", "password", "game-id"} {
+			if set[name] {
+				return fmt.Errorf("create: --%s is only used by corekeeper: %w", name, ErrUsage)
+			}
+		}
+		opts.Port = *port
+		opts.UDPPort = *udpPort
+		opts.AdminPassword = *adminPassword
+	default:
+		return fmt.Errorf("create: unknown game %q: %w", *gameName, ErrUsage)
+	}
+
+	inst, err := instance.New(name, opts)
 	if err != nil {
 		return err
 	}
@@ -194,15 +221,21 @@ func runDownload(ctx context.Context, command string, args []string, stdout, std
 		return err
 	}
 
+	driver, err := games.Lookup(inst.Game)
+	if err != nil {
+		return err
+	}
+
 	fmt.Fprintf(stdout, "%s: downloading server files into %s\n", command, inst.InstallDir)
-	if err := runner.Run(ctx, stdout, corekeeper.InstallArgs(inst.InstallDir)...); err != nil {
+	if err := runner.Run(ctx, stdout, driver.Installer.InstallArgs(inst.InstallDir)...); err != nil {
 		return fmt.Errorf("%s instance %q: %w", command, name, err)
 	}
-	if _, err := os.Stat(corekeeper.BinaryPath(inst.InstallDir)); err != nil {
+	serverPath := driver.Installer.ServerPath(inst.InstallDir)
+	if _, err := os.Stat(serverPath); err != nil {
 		return fmt.Errorf("%s instance %q: server binary missing after download: %w", command, name, err)
 	}
 
-	fmt.Fprintf(stdout, "%s: %s is ready\n", command, corekeeper.BinaryPath(inst.InstallDir))
+	fmt.Fprintf(stdout, "%s: %s is ready\n", command, serverPath)
 	return nil
 }
 
@@ -236,7 +269,14 @@ func runList(args []string, stdout, stderr io.Writer) error {
 		if inst.Network.Port > 0 {
 			network = fmt.Sprintf("%s:%d", network, inst.Network.Port)
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%d\t%s\t%s\n", inst.Name, inst.Game, inst.MaxPlayers, network, inst.World.Name)
+		if inst.Network.UDPPort > 0 {
+			network = fmt.Sprintf("%s:%d/%d", inst.Network.Mode, inst.Network.Port, inst.Network.UDPPort)
+		}
+		players := fmt.Sprint(inst.MaxPlayers)
+		if inst.MaxPlayers == 0 {
+			players = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", inst.Name, inst.Game, players, network, inst.World.Name)
 	}
 	return tw.Flush()
 }
@@ -267,14 +307,24 @@ func runShow(args []string, stdout, stderr io.Writer) error {
 		{"files", inst.InstallDir},
 		{"data", inst.DataDir},
 		{"world", inst.World.Name},
-		{"world index", fmt.Sprint(inst.World.Index)},
-		{"world mode", string(inst.World.Mode)},
-		{"seed", orDefault(inst.World.Seed, "(random)")},
-		{"max players", fmt.Sprint(inst.MaxPlayers)},
 		{"network", inst.Network.Mode},
 		{"port", fmt.Sprint(inst.Network.Port)},
-		{"password", orDefault(inst.Network.Password, "(none)")},
-		{"game id", orDefault(inst.GameID, "(generated on first start)")},
+	}
+	if inst.Game == instance.GameProjectZomboid {
+		rows = append(rows,
+			[2]string{"direct port", fmt.Sprint(inst.Network.UDPPort)},
+			[2]string{"admin password", orDefault(inst.AdminPassword, "(none)")},
+			[2]string{"max players", "from the server ini"},
+		)
+	} else {
+		rows = append(rows,
+			[2]string{"world index", fmt.Sprint(inst.World.Index)},
+			[2]string{"world mode", string(inst.World.Mode)},
+			[2]string{"seed", orDefault(inst.World.Seed, "(random)")},
+			[2]string{"max players", fmt.Sprint(inst.MaxPlayers)},
+			[2]string{"password", orDefault(inst.Network.Password, "(none)")},
+			[2]string{"game id", orDefault(inst.GameID, "(generated on first start)")},
+		)
 	}
 	for _, row := range rows {
 		fmt.Fprintf(tw, "%s\t%s\n", row[0], row[1])
@@ -303,7 +353,7 @@ func runStart(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return err
 	}
 
-	launchArgs, logPath, err := prepareStart(s, inst)
+	launch, logPath, err := prepareStart(s, inst)
 	if err != nil {
 		return err
 	}
@@ -318,30 +368,34 @@ func runStart(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	}
 	defer func() { _ = logFile.Close() }() // the process owns the descriptor until it exits
 
-	return serve(ctx, s, inst, launchArgs, io.MultiWriter(stdout, logFile), logPath, true)
+	return serve(ctx, s, inst, launch, io.MultiWriter(stdout, logFile), logPath, true)
 }
 
-// prepareStart validates a launch and returns its arguments and log path.
+// prepareStart validates a launch and returns its command and log path.
 // Two servers on one data directory corrupt the world, so it refuses early.
-func prepareStart(s *store.Store, inst instance.Instance) ([]string, string, error) {
+func prepareStart(s *store.Store, inst instance.Instance) (game.Launch, string, error) {
+	driver, err := games.Lookup(inst.Game)
+	if err != nil {
+		return game.Launch{}, "", err
+	}
 	state, err := s.LoadState(inst.Name)
 	if err != nil {
-		return nil, "", err
+		return game.Launch{}, "", err
 	}
 	if state.Running() && process.Alive(state.PID) {
-		return nil, "", fmt.Errorf("start instance %q: %w (pid %d)", inst.Name, ErrRunning, state.PID)
+		return game.Launch{}, "", fmt.Errorf("start instance %q: %w (pid %d)", inst.Name, ErrRunning, state.PID)
 	}
-	if _, err := os.Stat(corekeeper.BinaryPath(inst.InstallDir)); err != nil {
-		return nil, "", fmt.Errorf("start instance %q: server is not installed, run: gamehost install %s: %w", inst.Name, inst.Name, err)
+	if _, err := os.Stat(driver.Installer.ServerPath(inst.InstallDir)); err != nil {
+		return game.Launch{}, "", fmt.Errorf("start instance %q: server is not installed, run: gamehost install %s: %w", inst.Name, inst.Name, err)
 	}
 
 	// Validate the launch contract before a process exists.
-	launchArgs, err := corekeeper.Args(inst)
+	launch, err := driver.Runner.Launch(inst)
 	if err != nil {
-		return nil, "", err
+		return game.Launch{}, "", err
 	}
 	logPath := filepath.Join(s.Layout(inst.Name).Logs, time.Now().Format("2006-01-02_15-04-05")+".log")
-	return launchArgs, logPath, nil
+	return launch, logPath, nil
 }
 
 // startDetached re-executes gamehost as a supervisor in a new session.
@@ -399,11 +453,11 @@ func startDetached(s *store.Store, inst instance.Instance, logPath string, stdou
 
 // serve starts the server and reports its lifecycle until it exits.
 // It runs in the foreground or inside the detached supervisor.
-func serve(ctx context.Context, s *store.Store, inst instance.Instance, launchArgs []string, out io.Writer, logPath string, foreground bool) error {
+func serve(ctx context.Context, s *store.Store, inst instance.Instance, launch game.Launch, out io.Writer, logPath string, foreground bool) error {
 	server, err := process.Start(process.Spec{
-		Path: corekeeper.BinaryPath(inst.InstallDir),
-		Args: launchArgs,
-		Dir:  inst.InstallDir,
+		Path: launch.Path,
+		Args: launch.Args,
+		Dir:  launch.Dir,
 		Out:  out,
 	})
 	if err != nil {
@@ -437,14 +491,17 @@ func serve(ctx context.Context, s *store.Store, inst instance.Instance, launchAr
 	if !res.Stopped && res.ExitCode != 0 {
 		phase = instance.PhaseCrashed
 	}
-	// The server writes the session id next to its binary; it is best effort
-	// because a failed launch never creates the file.
-	gameID, _ := corekeeper.ReadGameID(inst.InstallDir)
+	// The session id is best effort: a failed launch never writes one, and
+	// games without join codes leave it empty.
+	sessionID := ""
+	if driver, err := games.Lookup(inst.Game); err == nil {
+		sessionID = driver.Runner.SessionID(inst)
+	}
 	if err := s.SaveState(inst.Name, instance.State{
 		Phase:     phase,
 		StartedAt: startedAt,
 		ExitCode:  res.ExitCode,
-		GameID:    gameID,
+		GameID:    sessionID,
 	}); err != nil {
 		return err
 	}
@@ -475,11 +532,15 @@ func runSupervise(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if err != nil {
 		return err
 	}
-	launchArgs, err := corekeeper.Args(inst)
+	driver, err := games.Lookup(inst.Game)
 	if err != nil {
 		return err
 	}
-	return serve(ctx, s, inst, launchArgs, stdout, *logPath, false)
+	launch, err := driver.Runner.Launch(inst)
+	if err != nil {
+		return err
+	}
+	return serve(ctx, s, inst, launch, stdout, *logPath, false)
 }
 
 // runStop asks a running server to exit and waits for it.
@@ -831,14 +892,15 @@ func runStatus(args []string, stdout, stderr io.Writer) error {
 		)
 	}
 
-	// The file wins: it is what the running server reports right now, while the
-	// state only knows the id of the last finished run.
-	gameID := state.GameID
-	if id, err := corekeeper.ReadGameID(inst.InstallDir); err == nil {
-		gameID = id
-	}
-	if gameID != "" {
-		rows = append(rows, [2]string{"game id", gameID})
+	// The live value wins over the state, which only knows the last run.
+	if driver, err := games.Lookup(inst.Game); err == nil {
+		label, value := driver.Runner.Join(inst)
+		if value == "" {
+			value = state.GameID
+		}
+		if value != "" {
+			rows = append(rows, [2]string{label, value})
+		}
 	}
 	if state.Phase == instance.PhaseCrashed {
 		rows = append(rows, [2]string{"last exit", fmt.Sprint(state.ExitCode)})
@@ -891,6 +953,13 @@ func newFlagSet(name string, stderr io.Writer) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	return fs
+}
+
+// setFlags returns the flags the user passed explicitly.
+func setFlags(fs *flag.FlagSet) map[string]bool {
+	set := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	return set
 }
 
 // reorderFlags moves flag groups before positional arguments.

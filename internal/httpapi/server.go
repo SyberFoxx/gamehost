@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/syberfoxx/gamehost/internal/corekeeper"
+	"github.com/syberfoxx/gamehost/internal/games"
 	"github.com/syberfoxx/gamehost/internal/instance"
 	"github.com/syberfoxx/gamehost/internal/logs"
 	"github.com/syberfoxx/gamehost/internal/process"
@@ -34,7 +34,7 @@ type Status struct {
 	Phase      instance.Phase `json:"phase"`
 	PID        int            `json:"pid,omitempty"`
 	Uptime     string         `json:"uptime,omitempty"`
-	GameID     string         `json:"game_id,omitempty"`
+	Join       string         `json:"join,omitempty"`
 	LastExit   int            `json:"last_exit,omitempty"`
 	World      string         `json:"world"`
 	WorldMode  instance.Mode  `json:"world_mode"`
@@ -245,11 +245,13 @@ func (s *Server) status(inst instance.Instance) (Status, error) {
 		status.LastExit = state.ExitCode
 	}
 
-	// The file wins: it is what the running server reports right now.
-	if id, err := corekeeper.ReadGameID(inst.InstallDir); err == nil {
-		status.GameID = id
-	} else {
-		status.GameID = state.GameID
+	// The live value wins over the state, which only knows the last run.
+	if driver, err := games.Lookup(inst.Game); err == nil {
+		if _, value := driver.Runner.Join(inst); value != "" {
+			status.Join = value
+		} else {
+			status.Join = state.GameID
+		}
 	}
 	return status, nil
 }

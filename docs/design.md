@@ -6,9 +6,9 @@ The project doubles as a learning vehicle: every milestone introduces a Go conce
 program needs (process control, signals, concurrency, `net/http`, tests with `-race`), instead of
 synthetic exercises.
 
-**Status:** M0–M6 implemented (`doctor`, instance model and store, `install`/`update`,
+**Status:** M0–M7 implemented (`doctor`, instance model and store, `install`/`update`,
 `start`/`status` with join information, `start --detach`, `stop`, `logs`/`logs -f`,
-`backup`/`restore`, `serve` with the HTTP API and panel). M7 is next.
+`backup`/`restore`, `serve` with the HTTP API and panel, and a second game driver).
 
 ## 1. Goals and non-goals
 
@@ -26,9 +26,11 @@ synthetic exercises.
 - Docker or Podman orchestration.
 - Mod management (mod.io).
 - Discord webhooks, metrics, scheduled jobs.
-- A second game driver, TUI or web UI before the Core Keeper CLI is solid.
+- A TUI, or a third game driver before the first two are solid.
 
-## 2. Verified facts about the Core Keeper dedicated server
+## 2. Verified facts about the supported games
+
+### Core Keeper
 
 Primary source: the `ARGUMENTS.txt` and launch scripts shipped **inside the game files**
 (`CoreKeeperServer` install directory), which are authoritative. Secondary source:
@@ -82,13 +84,38 @@ Still open:
 1. Whether running under Xvfb is worth it to hide the window on a desktop host.
 2. Exact save-file layout inside `-datapath` once a world finishes generating.
 
+### Project Zomboid
+
+Primary source: [PZwiki, Dedicated server](https://pzwiki.net/wiki/Dedicated_server) and
+[PZwiki, Startup parameters](https://pzwiki.net/wiki/Startup_parameters), both current for build
+42.21.
+
+| Fact | Value |
+| --- | --- |
+| Dedicated server Steam app | `380870` |
+| Steam login | `anonymous` |
+| Launch | `bash start-server.sh` from the install directory, arguments forwarded to the server |
+| Session name | `-servername <name>`, which is also the ini and save name |
+| Admin | `-adminpassword <pw>` creates the default admin, bypassing the first-run prompt |
+| Ports | `-port` overrides `DefaultPort` (`16261` UDP); `-udpport` overrides `UDPPort` (`16262` UDP) |
+| World data | `-cachedir=<dir>`; default `~/Zomboid` |
+| Files inside the cache | `Server/<name>.ini` plus `.lua` files, `Saves/Multiplayer/<name>/`, `db/`, `Logs/` |
+| Join | No game ID: players add the address and port in the Favorites tab |
+| Player limit and join password | only in `Server/<name>.ini`, no launch flag |
+
+The driver passes only what a flag can express: server name, both ports, cache directory and the
+admin password. Max players and the join password stay in the ini, which the server also rewrites,
+so gamehost does not fight it.
+
 ## 3. Architecture
 
 ```mermaid
 graph TD
     A["cmd/gamehost main"] --> B["internal/app"]
     B --> C["internal/instance"]
-    B --> D["internal/corekeeper"]
+    B --> K["internal/games"]
+    K --> D["internal/corekeeper"]
+    K --> L["internal/projectzomboid"]
     B --> E["internal/steamcmd"]
     B --> F["internal/backup"]
     B --> G["internal/httpapi"]
@@ -109,8 +136,11 @@ graph TD
 | `internal/instance` | domain model and validation | M2 |
 | `internal/process` | supervise one OS process: start, signal, wait, state | M3 |
 | `internal/logs` | log file plus in-memory ring buffer and subscribers | M4 |
-| `internal/corekeeper` | translate an instance into `CoreKeeperServer` args, read `GameID.txt` | M3 |
-| `internal/steamcmd` | install/update app `1963720` and validate the binary | M1 |
+| `internal/game` | driver contracts: install args, launch, join and session id | M7 |
+| `internal/games` | registry that resolves a game name to its driver | M7 |
+| `internal/corekeeper` | Core Keeper driver: args, binary, `GameID.txt` | M3 |
+| `internal/projectzomboid` | Project Zomboid driver: Steam app, `start-server.sh`, ports | M7 |
+| `internal/steamcmd` | install/update a dedicated server through SteamCMD | M1 |
 | `internal/backup` | tar.gz snapshots of the data directory with retention | M5 |
 | `internal/httpapi` | HTTP API plus SSE log stream and embedded UI | M6 |
 
@@ -126,14 +156,15 @@ Rules that keep the project idiomatic:
 
 ```go
 type Instance struct {
-    Name       string
-    Game       string // "corekeeper"
-    InstallDir string
-    DataDir    string
-    World      World
-    Network    Network
-    MaxPlayers int
-    GameID     string
+    Name          string
+    Game          string // corekeeper | projectzomboid
+    InstallDir    string
+    DataDir       string
+    World         World
+    Network       Network
+    MaxPlayers    int    // corekeeper only
+    GameID        string // corekeeper only
+    AdminPassword string // projectzomboid only
 }
 
 type World struct {
@@ -146,9 +177,14 @@ type World struct {
 type Network struct {
     Mode     string // sdr | direct
     Port     int
-    Password string
+    UDPPort  int    // projectzomboid only
+    Password string // corekeeper only
 }
 ```
+
+Two fields are game-specific: `AdminPassword` (Project Zomboid) and `Network.UDPPort` (Project
+Zomboid's direct port). Validation is per game, so a Core Keeper instance rejects them and a Project
+Zomboid one rejects world index, seed, mode, game ID and join password.
 
 Runtime state is separate from configuration, so a crashed server never corrupts the config:
 
@@ -293,7 +329,7 @@ Why this shape:
 | M4 | `logs` | `-f` follows live output without losing lines | `bufio.Scanner`, ring buffer, `ReadAt`, ticker |
 | M5 | `backup`, `restore` | archive restores into a working world | `archive/tar`, `compress/gzip`, `filepath.WalkDir` |
 | M6 | `serve` | start/stop/status from the browser, live log via SSE | `net/http`, `Server.Shutdown`, `embed` |
-| M7 | second game driver | `game.Driver` interface with two implementations | interfaces at the consumer, plugin-style layout |
+| M7 | second game driver | `game.Installer` and `game.Runner` with two implementations | interfaces at the consumer, registry instead of branches |
 
 Each milestone is one work unit: code, tests and doc updates in the same commit.
 
@@ -345,3 +381,10 @@ Each milestone is one work unit: code, tests and doc updates in the same commit.
 - **The HTTP API shares the CLI lifecycle.** The panel and the terminal must not disagree about a
   phase or a grace period, so both call the same start and stop helpers instead of a parallel
   implementation.
+- **Games are drivers, not branches.** `internal/game` holds two small interfaces (`Installer`,
+  `Runner`) and `internal/games` maps a name to one registration, so the CLI and the API ask for
+  install arguments, a launch command and join information without knowing the game. Adding a game
+  means one package and one registry entry.
+- **Game-specific settings stay in the game's own files when the game owns them.** Project Zomboid
+  rewrites its ini, so max players and the join password stay there; gamehost only manages what the
+  startup flags can express.

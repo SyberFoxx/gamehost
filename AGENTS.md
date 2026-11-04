@@ -3,7 +3,7 @@
 ## Context
 
 `gamehost` is a terminal-first manager for dedicated game servers, written in Go 1.26.
-First supported game: Core Keeper (Steam app `1963720`).
+Supported games: Core Keeper (Steam app `1963720`) and Project Zomboid (Steam app `380870`).
 Module path: `github.com/syberfoxx/gamehost`.
 Entry point: `cmd/gamehost`. Design and roadmap: `docs/design.md`.
 
@@ -32,8 +32,11 @@ Entry point: `cmd/gamehost`. Design and roadmap: `docs/design.md`.
 ## Work rules
 
 - Read `docs/design.md` and the files you will touch before editing.
-- Verify Core Keeper behavior against the documented contract; do not invent flags.
-  Reference image: `github.com/escapingnetwork/core-keeper-dedicated` (`scripts/compile-parameters.sh`).
+- Verify game behavior against the documented contract; do not invent flags.
+  Core Keeper: `github.com/escapingnetwork/core-keeper-dedicated` (`scripts/compile-parameters.sh`).
+  Project Zomboid: `pzwiki.net/wiki/Dedicated_server` and `pzwiki.net/wiki/Startup_parameters`.
+- Game behavior lives behind `internal/game`: add a driver package and one entry in
+  `internal/games`, never a `switch` on the game name in the CLI.
 - Changes to launch flags, paths or the state machine must update `docs/design.md` in the same change.
 - One milestone per work unit: code, tests and docs together.
 
@@ -74,3 +77,11 @@ Entry point: `cmd/gamehost`. Design and roadmap: `docs/design.md`.
 - World data lives under `-datapath`, not next to the binary. Back up that directory.
 - Setting `-port` switches the server from Steam relay (SDR) to direct connect and requires
   port forwarding; leave it unset for a small friend group.
+- Project Zomboid runs `start-server.sh` from its install directory and takes `-servername`,
+  `-adminpassword`, `-port`, `-udpport` and `-cachedir`; its world data is `-cachedir`, defaulting
+  to `~/Zomboid` (`Server/<name>.ini`, `Saves/Multiplayer/<name>`, `db`, `Logs`).
+- Project Zomboid prompts for an admin password on first start, so a headless launch must pass
+  `-adminpassword`; max players and the join password live in the ini, not in flags.
+- Project Zomboid has no game ID: players join by address and UDP port (`16261`, direct `16262`).
+- The `start-server.sh` script ships from SteamCMD; if it loses the execute bit, `start` fails with
+  `permission denied` until it is `chmod +x`.

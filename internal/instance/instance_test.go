@@ -98,6 +98,34 @@ func TestNew(t *testing.T) {
 			opts:    Options{MaxPlayers: 4, Mode: ModeNormal},
 			wantErr: true,
 		},
+		{
+			name:  "project zomboid defaults",
+			input: "zomboid",
+			opts: Options{
+				Game:          GameProjectZomboid,
+				AdminPassword: "secret",
+				InstallDir:    "/srv/files",
+				DataDir:       "/srv/data",
+			},
+			assert: func(t *testing.T, got Instance) {
+				if got.Network.Mode != NetworkDirect || got.Network.Port != 16261 || got.Network.UDPPort != 16262 {
+					t.Errorf("Network = %+v, want direct on 16261/16262", got.Network)
+				}
+				if got.World.Name != "servertest" || got.MaxPlayers != 0 {
+					t.Errorf("instance = %+v, want the Project Zomboid defaults", got)
+				}
+			},
+		},
+		{
+			name:  "project zomboid without an admin password",
+			input: "zomboid",
+			opts: Options{
+				Game:       GameProjectZomboid,
+				InstallDir: "/srv/files",
+				DataDir:    "/srv/data",
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -144,6 +172,8 @@ func TestValidate(t *testing.T) {
 		{"sdr with port", func(i Instance) Instance { i.Network.Port = 27015; return i }, true},
 		{"direct without port", func(i Instance) Instance { i.Network.Mode = NetworkDirect; return i }, true},
 		{"negative world index", func(i Instance) Instance { i.World.Index = -1; return i }, true},
+		{"udp port", func(i Instance) Instance { i.Network.UDPPort = 16262; return i }, true},
+		{"admin password", func(i Instance) Instance { i.AdminPassword = "secret"; return i }, true},
 	}
 
 	for _, tt := range tests {
