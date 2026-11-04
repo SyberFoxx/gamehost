@@ -16,6 +16,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/syberfoxx/gamehost/internal/atomicfile"
 	"github.com/syberfoxx/gamehost/internal/backup"
 	"github.com/syberfoxx/gamehost/internal/doctor"
 	"github.com/syberfoxx/gamehost/internal/game"
@@ -39,16 +40,22 @@ var (
 	ErrUnhealthy = errors.New("environment is not ready")
 	// ErrRunning reports an instance that already has a live server.
 	ErrRunning = errors.New("instance is already running")
+	// ErrBusy reports an instance another gamehost command is using.
+	ErrBusy = errors.New("instance is in use by another gamehost command")
 )
 
 // stopGrace is how long a server gets to save before it is killed.
 const stopGrace = 20 * time.Second
+
+// logRetention is how many run logs an instance keeps.
+const logRetention = 10
 
 const usage = `usage: gamehost <command> [flags] [name]
 
 commands:
   backup    archive the world data of an instance
   create    create a server instance
+  import-world  copy an existing world save into an instance
   install   download the server files of an instance
   list      list instances
   logs      print or follow the newest log of an instance
@@ -88,6 +95,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runCreate(args[1:], stdout, stderr)
 	case "install", "update":
 		return runDownload(ctx, args[0], args[1:], stdout, stderr)
+	case "import-world":
+		return runImportWorld(args[1:], stdout, stderr)
 	case "list":
 		return runList(args[1:], stdout, stderr)
 	case "show":
@@ -221,11 +230,18 @@ func runDownload(ctx context.Context, command string, args []string, stdout, std
 	// An update rewrites the server files under a running process, and the
 	// archive is only consistent while the world is closed.
 	if command == "update" {
-		if err := requireStopped(s, inst, command); err != nil {
+		release, err := requireStopped(s, inst, command)
+		if err != nil {
 			return err
 		}
-		if _, err := backupBeforeUpdate(s, inst, stdout); err != nil {
+		defer release()
+		res, err := archiveData(s, inst, "pre-update_")
+		if err != nil {
 			return err
+		}
+		if res.Path != "" {
+			fmt.Fprintf(stdout, "backed up %s before the update: %s (%d files, %s)\n",
+				inst.Name, res.Path, res.Files, humanBytes(res.Bytes))
 		}
 	}
 
@@ -252,28 +268,30 @@ func runDownload(ctx context.Context, command string, args []string, stdout, std
 	return nil
 }
 
-// backupBeforeUpdate archives the data directory so an update can be undone.
-// It returns an empty path when the instance has no data yet.
-func backupBeforeUpdate(s *store.Store, inst instance.Instance, stdout io.Writer) (string, error) {
+// archiveData writes a safety archive of the data directory.
+// It returns an empty result when the instance has no data yet.
+func archiveData(s *store.Store, inst instance.Instance, prefix string) (backup.Result, error) {
 	layout := s.Layout(inst.Name)
-	if _, err := os.Stat(layout.Data); err != nil {
+	entries, err := os.ReadDir(layout.Data)
+	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return "", nil
+			return backup.Result{}, nil
 		}
-		return "", fmt.Errorf("inspect data directory of %q: %w", inst.Name, err)
+		return backup.Result{}, fmt.Errorf("inspect data directory of %q: %w", inst.Name, err)
+	}
+	if len(entries) == 0 {
+		return backup.Result{}, nil
 	}
 	if err := os.MkdirAll(layout.Backups, 0o755); err != nil {
-		return "", fmt.Errorf("create backup directory: %w", err)
+		return backup.Result{}, fmt.Errorf("create backup directory: %w", err)
 	}
 
-	path := filepath.Join(layout.Backups, "pre-update_"+time.Now().Format("2006-01-02_15-04-05")+".tar.gz")
+	path := filepath.Join(layout.Backups, prefix+time.Now().Format("2006-01-02_15-04-05")+".tar.gz")
 	res, err := backup.Create(path, layout.Data)
 	if err != nil {
-		return "", fmt.Errorf("backup %q before the update: %w", inst.Name, err)
+		return backup.Result{}, fmt.Errorf("backup %q: %w", inst.Name, err)
 	}
-	fmt.Fprintf(stdout, "backed up %s before the update: %s (%d files, %s)\n",
-		inst.Name, res.Path, res.Files, humanBytes(res.Bytes))
-	return res.Path, nil
+	return res, nil
 }
 
 // runList prints every instance as a table.
@@ -405,6 +423,9 @@ func runStart(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	}
 	defer func() { _ = logFile.Close() }() // the process owns the descriptor until it exits
 
+	if _, err := logs.Prune(s.Layout(inst.Name).Logs, logRetention); err != nil {
+		return err
+	}
 	return serve(ctx, s, inst, launch, io.MultiWriter(stdout, logFile), logPath, true)
 }
 
@@ -447,6 +468,10 @@ func startDetached(s *store.Store, inst instance.Instance, logPath string, stdou
 		return fmt.Errorf("open log %q: %w", logPath, err)
 	}
 	defer func() { _ = logFile.Close() }() // the supervisor inherits its own descriptor
+
+	if _, err := logs.Prune(s.Layout(inst.Name).Logs, logRetention); err != nil {
+		return err
+	}
 
 	// Claim the instance before the child starts, so a concurrent start sees it.
 	if err := s.SaveState(inst.Name, instance.State{
@@ -491,6 +516,17 @@ func startDetached(s *store.Store, inst instance.Instance, logPath string, stdou
 // serve starts the server and reports its lifecycle until it exits.
 // It runs in the foreground or inside the detached supervisor.
 func serve(ctx context.Context, s *store.Store, inst instance.Instance, launch game.Launch, out io.Writer, logPath string, foreground bool) error {
+	// The lock closes the window between the stopped check and the launch, so
+	// two servers can never share one data directory.
+	lock, err := s.Lock(inst.Name)
+	if err != nil {
+		if errors.Is(err, store.ErrLocked) {
+			return fmt.Errorf("start instance %q: %w", inst.Name, ErrRunning)
+		}
+		return fmt.Errorf("start instance %q: %w", inst.Name, err)
+	}
+	defer func() { _ = lock.Release() }()
+
 	server, err := process.Start(process.Spec{
 		Path: launch.Path,
 		Args: launch.Args,
@@ -733,9 +769,11 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := requireStopped(s, inst, "backup"); err != nil {
+	release, err := requireStopped(s, inst, "backup")
+	if err != nil {
 		return err
 	}
+	defer release()
 	layout := s.Layout(inst.Name)
 	if err := os.MkdirAll(layout.Backups, 0o755); err != nil {
 		return fmt.Errorf("create backup directory: %w", err)
@@ -772,9 +810,11 @@ func runRestore(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := requireStopped(s, inst, "restore"); err != nil {
+	release, err := requireStopped(s, inst, "restore")
+	if err != nil {
 		return err
 	}
+	defer release()
 	layout := s.Layout(inst.Name)
 
 	archivePath, err := resolveArchive(layout.Backups, fs.Arg(1))
@@ -783,12 +823,9 @@ func runRestore(args []string, stdout, stderr io.Writer) error {
 	}
 
 	// Keep the current world before replacing it, so a bad archive is recoverable.
-	safety := ""
-	if _, err := os.Stat(layout.Data); err == nil {
-		safety = filepath.Join(layout.Backups, "pre-restore_"+time.Now().Format("2006-01-02_15-04-05")+".tar.gz")
-		if _, err := backup.Create(safety, layout.Data); err != nil {
-			return fmt.Errorf("backup the current data first: %w", err)
-		}
+	safety, err := archiveData(s, inst, "pre-restore_")
+	if err != nil {
+		return err
 	}
 
 	if err := backup.Restore(archivePath, layout.Data); err != nil {
@@ -796,10 +833,96 @@ func runRestore(args []string, stdout, stderr io.Writer) error {
 	}
 
 	fmt.Fprintf(stdout, "restored %s from %s\n", inst.Name, archivePath)
-	if safety != "" {
-		fmt.Fprintf(stdout, "previous data saved as %s\n", safety)
+	if safety.Path != "" {
+		fmt.Fprintf(stdout, "previous data saved as %s\n", safety.Path)
 	}
 	return nil
+}
+
+// runImportWorld copies an existing world save into the instance's slot.
+func runImportWorld(args []string, stdout, stderr io.Writer) error {
+	fs := newFlagSet("import-world", stderr)
+	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
+		return usageError(err)
+	}
+	if fs.NArg() != 2 {
+		return fmt.Errorf("import-world needs an instance name and a world file: %w", ErrUsage)
+	}
+
+	s, inst, err := loadInstance(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	release, err := requireStopped(s, inst, "import-world")
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	source, err := openWorld(fs.Arg(1))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = source.Close() }()
+
+	safety, err := archiveData(s, inst, "pre-import_")
+	if err != nil {
+		return err
+	}
+	if safety.Path != "" {
+		fmt.Fprintf(stdout, "saved the current data first: %s (%d files, %s)\n",
+			safety.Path, safety.Files, humanBytes(safety.Bytes))
+	}
+
+	layout := s.Layout(inst.Name)
+	worlds := filepath.Join(layout.Data, "worlds")
+	if err := os.MkdirAll(worlds, 0o755); err != nil {
+		return fmt.Errorf("create world directory: %w", err)
+	}
+	target := filepath.Join(worlds, fmt.Sprintf("%d.world.gzip", inst.World.Index))
+	if err := atomicfile.ReplaceFile(target, source, 0o644); err != nil {
+		return fmt.Errorf("import world into %q: %w", inst.Name, err)
+	}
+
+	fmt.Fprintf(stdout, "imported %s into %s (slot %d)\n  world: %s\nnext: gamehost start %s --detach\n",
+		fs.Arg(1), inst.Name, inst.World.Index, target, inst.Name)
+	return nil
+}
+
+// openWorld opens a Core Keeper world save and checks its gzip header.
+func openWorld(path string) (*os.File, error) {
+	if !strings.HasSuffix(path, ".world.gzip") {
+		return nil, fmt.Errorf("world %q must end in .world.gzip: %w", path, ErrUsage)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open world %q: %w", path, err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("inspect world %q: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, fmt.Errorf("world %q is not a regular file: %w", path, ErrUsage)
+	}
+
+	// A world save is a gzip stream; reject anything else before touching data.
+	magic := make([]byte, 2)
+	if _, err := io.ReadFull(file, magic); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("read world %q: %w", path, err)
+	}
+	if magic[0] != 0x1f || magic[1] != 0x8b {
+		_ = file.Close()
+		return nil, fmt.Errorf("world %q is not gzip compressed: %w", path, ErrUsage)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("rewind world %q: %w", path, err)
+	}
+	return file, nil
 }
 
 // loadInstance resolves the store and loads one instance.
@@ -815,16 +938,26 @@ func loadInstance(name string) (*store.Store, instance.Instance, error) {
 	return s, inst, nil
 }
 
-// requireStopped refuses an operation that needs exclusive access to the data.
-func requireStopped(s *store.Store, inst instance.Instance, action string) error {
+// requireStopped refuses an operation that needs exclusive access to the data
+// and holds the instance lock until the returned release runs.
+func requireStopped(s *store.Store, inst instance.Instance, action string) (func(), error) {
 	state, err := s.LoadState(inst.Name)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if state.Running() && process.Alive(state.PID) {
-		return fmt.Errorf("%s instance %q: %w (pid %d), stop it first", action, inst.Name, ErrRunning, state.PID)
+		return nil, fmt.Errorf("%s instance %q: %w (pid %d), stop it first", action, inst.Name, ErrRunning, state.PID)
 	}
-	return nil
+
+	// A server that is starting has no running state yet; the lock covers it.
+	lock, err := s.Lock(inst.Name)
+	if err != nil {
+		if errors.Is(err, store.ErrLocked) {
+			return nil, fmt.Errorf("%s instance %q: %w, wait for it", action, inst.Name, ErrBusy)
+		}
+		return nil, fmt.Errorf("%s instance %q: %w", action, inst.Name, err)
+	}
+	return func() { _ = lock.Release() }, nil
 }
 
 // resolveArchive accepts a path or a file name inside the backup directory.

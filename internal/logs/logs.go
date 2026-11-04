@@ -45,6 +45,42 @@ func Latest(dir string) (string, error) {
 	return filepath.Join(dir, names[len(names)-1]), nil
 }
 
+// Prune removes the oldest log files in dir, keeping the newest keep.
+// It returns the names it removed.
+func Prune(dir string, keep int) ([]string, error) {
+	if keep < 1 {
+		keep = 1
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("list logs %q: %w", dir, err)
+	}
+
+	var names []string
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".log" {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	slices.Sort(names)
+	if len(names) <= keep {
+		return nil, nil
+	}
+
+	removed := make([]string, 0, len(names)-keep)
+	for _, name := range names[:len(names)-keep] {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil {
+			return removed, fmt.Errorf("remove log %q: %w", name, err)
+		}
+		removed = append(removed, name)
+	}
+	return removed, nil
+}
+
 // Tail writes the last lines of a file.
 // It keeps at most lines in memory, so following a large log stays cheap.
 func Tail(w io.Writer, path string, lines int) error {

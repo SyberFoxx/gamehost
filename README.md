@@ -34,6 +34,7 @@ concurrency and tests with `-race`.
 | M5 | `backup` / `restore` | done |
 | M6 | `serve`: HTTP API and web panel | done |
 | M7 | second game driver | done |
+| M8 | operation: `import-world`, per-instance lock, log retention | done |
 
 ## Features
 
@@ -51,6 +52,9 @@ concurrency and tests with `-race`.
 - Serves a small web panel and a JSON API with live status, start/stop controls and an SSE log
   stream, embedding the page in the binary.
 - Runs two games behind one driver interface: Core Keeper and Project Zomboid.
+- Imports an existing `.world.gzip` save into an instance, archiving the current world first.
+- Holds a per-instance lock, so two servers or a backup and a start can never share one world.
+- Keeps the newest ten run logs and prunes the rest.
 
 ## Requirements
 
@@ -127,6 +131,21 @@ seconds for a clean save, then escalates to `SIGKILL`.
 Without `--port` the server uses the Steam relay network, so no router configuration is needed.
 Passing `--port 27015` switches it to direct connections, which requires opening UDP ports.
 
+### Importing an existing world
+
+A world created in single player, or copied from another server, can be dropped into an instance:
+
+```bash
+gamehost stop corekeeper
+gamehost import-world corekeeper ~/Descargas/Cueva.world.gzip
+gamehost start corekeeper --detach
+```
+
+`import-world` accepts only `.world.gzip` files with a gzip header, archives the current `data/`
+when it is not empty, and copies the save into the instance's slot (the `world` index shown by
+`gamehost show`). Client saves live in
+`~/.config/unity3d/Pugstorm/Core Keeper/Steam/<steam-id>/worlds/<slot>.world.gzip`.
+
 A Project Zomboid server uses the same commands with `--game`:
 
 ```bash
@@ -137,6 +156,21 @@ gamehost start zomboid --detach
 
 Project Zomboid has no join code: `status` reports the UDP port to add in the Favorites tab, and
 max players and the join password stay in `data/Server/base.ini`.
+
+## Verifying a real Core Keeper server
+
+The test suite stops at the SteamCMD download. Once per machine, walk the whole path:
+
+1. `gamehost doctor` reports every check `ok`.
+2. `gamehost create corekeeper --max-players 4 --password change-me`.
+3. `gamehost install corekeeper` ends with the binary path and no SteamCMD error.
+4. `gamehost start corekeeper --detach`, then `gamehost logs corekeeper -f` until the session
+   starts.
+5. Join with the id from `gamehost status corekeeper`, play a minute so the world saves.
+6. `gamehost stop corekeeper` prints one stopped line with exit `0`, not a signal.
+7. `gamehost backup corekeeper` writes an archive whose size grows with the world.
+8. Move `data/worlds/0.world.gzip` away, `gamehost restore corekeeper <archive>` and start again:
+   the world is back with its builds.
 
 ## Commands
 
@@ -150,6 +184,7 @@ max players and the join password stay in `data/Server/base.ini`.
 | `gamehost stop <name>` | stop a running server, waiting for a clean save |
 | `gamehost logs <name> [-n N]` | print the last `N` lines (default 100) of the newest log |
 | `gamehost logs <name> -f` | follow the log until Ctrl+C |
+| `gamehost import-world <name> <file>` | copy an existing `.world.gzip` save into the instance slot (stopped only) |
 | `gamehost backup <name> [-keep N]` | archive `data/`, keeping the newest `N` (default 5) |
 | `gamehost restore <name> <archive>` | replace `data/` from a backup, after saving the current one |
 | `gamehost serve [--addr]` | serve the HTTP API and web panel (default `127.0.0.1:8080`) |
@@ -270,8 +305,9 @@ servers/<name>/
 ├── state.json        phase, pid, start time, last exit code
 ├── files/            SteamCMD install directory (the game server itself)
 ├── data/             -datapath: worlds/, ServerConfig.json, mods/, backups
-├── logs/             one log file per run
-└── backups/          <timestamp>.tar.gz and pre-restore_<timestamp>.tar.gz
+├── logs/             one log file per run, newest ten kept
+├── backups/          <timestamp>.tar.gz, pre-restore_<timestamp>.tar.gz
+└── run.lock          held by the running server or a data command (flock)
 ```
 
 The repository never contains generated data.
@@ -288,6 +324,7 @@ The repository never contains generated data.
 | Friends cannot join a Project Zomboid server | ports `16261` and `16262` stay UDP | forward both, and allow them in the firewall |
 | `start-server.sh: Permission denied` | SteamCMD kept the script without the execute bit | `chmod +x files/start-server.sh` |
 | `backup`, `restore` or `update` refuses to run | the server holds the world files | `gamehost stop <name>` first |
+| `instance is already running` or `instance is in use by another gamehost command` | the server, or a command between its check and its state write, holds `run.lock` | wait for it, or `gamehost stop <name>` if a server was left behind |
 | `text file busy` in tests | `fork` inherits open write descriptors | do not run write-and-exec tests in parallel |
 
 ## Development

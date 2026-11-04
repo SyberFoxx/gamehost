@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -64,6 +65,42 @@ func TestLatest(t *testing.T) {
 	}
 	if want := filepath.Join(dir, "2026-11-04_14-01-14.log"); got != want {
 		t.Errorf("Latest() = %q, want %q", got, want)
+	}
+}
+
+// covers log retention
+func TestPrune(t *testing.T) {
+	t.Parallel()
+
+	if removed, err := Prune(filepath.Join(t.TempDir(), "missing"), 2); err != nil || removed != nil {
+		t.Errorf("Prune(missing) = %v, %v; want nil, nil", removed, err)
+	}
+
+	dir := t.TempDir()
+	writeLog(t, dir, "2026-11-01_10-00-00.log", "a")
+	writeLog(t, dir, "2026-11-02_10-00-00.log", "b")
+	writeLog(t, dir, "2026-11-03_10-00-00.log", "c")
+	writeLog(t, dir, "notes.txt", "not a log")
+
+	removed, err := Prune(dir, 2)
+	if err != nil {
+		t.Fatalf("Prune() error = %v", err)
+	}
+	if want := []string{"2026-11-01_10-00-00.log"}; !slices.Equal(removed, want) {
+		t.Errorf("Prune() removed %v, want %v", removed, want)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 {
+		t.Errorf("directory holds %d entries, want the newest two logs and notes.txt", len(entries))
+	}
+
+	// keep below one still protects the current log.
+	if removed, err := Prune(dir, 0); err != nil || len(removed) != 1 {
+		t.Errorf("Prune(0) = %v, %v; want one removal", removed, err)
 	}
 }
 

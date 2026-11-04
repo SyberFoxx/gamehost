@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"os"
@@ -488,8 +489,8 @@ func TestCreateRejectsForeignFlags(t *testing.T) {
 	}
 }
 
-// covers the safety archive written before an update
-func TestBackupBeforeUpdate(t *testing.T) {
+// covers the safety archive written before a destructive step
+func TestArchiveData(t *testing.T) {
 	t.Parallel()
 
 	s := store.New(t.TempDir())
@@ -510,27 +511,26 @@ func TestBackupBeforeUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var out bytes.Buffer
-	path, err := backupBeforeUpdate(s, inst, &out)
+	res, err := archiveData(s, inst, "pre-update_")
 	if err != nil {
-		t.Fatalf("backupBeforeUpdate() error = %v", err)
+		t.Fatalf("archiveData() error = %v", err)
 	}
-	if path == "" {
-		t.Fatal("backupBeforeUpdate() returned an empty path")
+	if res.Path == "" {
+		t.Fatal("archiveData() returned an empty path")
 	}
-	if _, err := os.Stat(path); err != nil {
+	if _, err := os.Stat(res.Path); err != nil {
 		t.Fatalf("archive missing: %v", err)
 	}
-	if !strings.HasPrefix(filepath.Base(path), "pre-update_") {
-		t.Errorf("archive = %q, want a pre-update name", filepath.Base(path))
+	if !strings.HasPrefix(filepath.Base(res.Path), "pre-update_") {
+		t.Errorf("archive = %q, want a pre-update name", filepath.Base(res.Path))
 	}
-	if !strings.Contains(out.String(), "backed up corekeeper before the update") {
-		t.Errorf("output = %q, want the backup notice", out.String())
+	if res.Files != 1 {
+		t.Errorf("archive holds %d files, want 1", res.Files)
 	}
 }
 
-// covers an instance that was never started, so it has nothing to archive
-func TestBackupBeforeUpdateWithoutData(t *testing.T) {
+// covers an instance with no data yet, which has nothing to archive
+func TestArchiveDataWithoutData(t *testing.T) {
 	t.Parallel()
 
 	s := store.New(t.TempDir())
@@ -544,14 +544,16 @@ func TestBackupBeforeUpdateWithoutData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("instance.New() error = %v", err)
 	}
-
-	var out bytes.Buffer
-	path, err := backupBeforeUpdate(s, inst, &out)
-	if err != nil {
-		t.Fatalf("backupBeforeUpdate() error = %v", err)
+	if err := os.MkdirAll(layout.Data, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if path != "" || out.Len() != 0 {
-		t.Errorf("path = %q, output = %q; want no backup without data", path, out.String())
+
+	res, err := archiveData(s, inst, "pre-update_")
+	if err != nil {
+		t.Fatalf("archiveData() error = %v", err)
+	}
+	if res.Path != "" {
+		t.Errorf("path = %q, want no archive for an empty data directory", res.Path)
 	}
 }
 
@@ -573,5 +575,200 @@ func TestUpdateRefusesRunningInstance(t *testing.T) {
 
 	if _, err := runArgs(t, "update", "corekeeper"); !errors.Is(err, ErrRunning) {
 		t.Errorf("update error = %v, want ErrRunning", err)
+	}
+}
+
+// writeWorld writes a gzip world save for the import tests.
+func writeWorld(t *testing.T, path string) {
+	t.Helper()
+
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(file)
+	if _, err := gz.Write([]byte("world")); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// covers importing an existing save into the instance slot
+func TestImportWorld(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	source := filepath.Join(t.TempDir(), "mine.world.gzip")
+	writeWorld(t, source)
+
+	out, err := runArgs(t, "import-world", "corekeeper", source)
+	if err != nil {
+		t.Fatalf("import-world error = %v", err)
+	}
+	for _, want := range []string{"imported", "slot 0", "next: gamehost start corekeeper"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+
+	root := os.Getenv("GAMEHOST_HOME")
+	target := filepath.Join(root, "servers", "corekeeper", "data", "worlds", "0.world.gzip")
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("imported world missing: %v", err)
+	}
+	want, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Error("imported world differs from the source")
+	}
+
+	backups := filepath.Join(root, "servers", "corekeeper", "backups")
+	if entries, err := os.ReadDir(backups); err == nil && len(entries) != 0 {
+		t.Errorf("backups = %v, want none for an empty instance", entries)
+	}
+}
+
+// covers archiving the previous world before an import
+func TestImportWorldSavesCurrentData(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	root := os.Getenv("GAMEHOST_HOME")
+	data := filepath.Join(root, "servers", "corekeeper", "data")
+	if err := os.MkdirAll(filepath.Join(data, "worlds"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(data, "worlds", "0.world.gzip"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	source := filepath.Join(t.TempDir(), "new.world.gzip")
+	writeWorld(t, source)
+
+	out, err := runArgs(t, "import-world", "corekeeper", source)
+	if err != nil {
+		t.Fatalf("import-world error = %v", err)
+	}
+	if !strings.Contains(out, "saved the current data first") {
+		t.Errorf("output = %q, want the safety archive notice", out)
+	}
+
+	entries, err := os.ReadDir(filepath.Join(root, "servers", "corekeeper", "backups"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || !strings.HasPrefix(entries[0].Name(), "pre-import_") {
+		t.Errorf("backups = %v, want one pre-import archive", entries)
+	}
+}
+
+// covers rejecting a file that is not a Core Keeper world
+func TestImportWorldRejectsInvalidFile(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	dir := t.TempDir()
+
+	plain := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(plain, []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	notGzip := filepath.Join(dir, "fake.world.gzip")
+	if err := os.WriteFile(notGzip, []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{plain, notGzip} {
+		if _, err := runArgs(t, "import-world", "corekeeper", path); !errors.Is(err, ErrUsage) {
+			t.Errorf("import-world %q error = %v, want ErrUsage", filepath.Base(path), err)
+		}
+	}
+}
+
+// covers the run lock refusing a second server before it starts
+func TestStartRefusesLockedInstance(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	s := store.New(os.Getenv("GAMEHOST_HOME"))
+	layout := s.Layout("corekeeper")
+	if err := os.WriteFile(filepath.Join(layout.Files, "CoreKeeperServer"), []byte("fake"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A starting server holds the lock before it publishes its state.
+	lock, err := s.Lock("corekeeper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Release() }()
+
+	if _, err := runArgs(t, "start", "corekeeper"); !errors.Is(err, ErrRunning) {
+		t.Errorf("start error = %v, want ErrRunning", err)
+	}
+}
+
+// covers data commands refusing an instance another process holds
+func TestCommandsRefuseLockedInstance(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	lock, err := store.New(os.Getenv("GAMEHOST_HOME")).Lock("corekeeper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Release() }()
+
+	source := filepath.Join(t.TempDir(), "mine.world.gzip")
+	writeWorld(t, source)
+
+	for _, args := range [][]string{
+		{"backup", "corekeeper"},
+		{"update", "corekeeper"},
+		{"import-world", "corekeeper", source},
+	} {
+		if _, err := runArgs(t, args...); !errors.Is(err, ErrBusy) {
+			t.Errorf("%s error = %v, want ErrBusy", args[0], err)
+		}
+	}
+}
+
+// covers refusing an import while the server is alive
+func TestImportWorldRefusesRunningInstance(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	s := store.New(os.Getenv("GAMEHOST_HOME"))
+	if err := s.SaveState("corekeeper", instance.State{
+		Phase: instance.PhaseRunning,
+		PID:   os.Getpid(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	source := filepath.Join(t.TempDir(), "mine.world.gzip")
+	writeWorld(t, source)
+	if _, err := runArgs(t, "import-world", "corekeeper", source); !errors.Is(err, ErrRunning) {
+		t.Errorf("import-world error = %v, want ErrRunning", err)
 	}
 }

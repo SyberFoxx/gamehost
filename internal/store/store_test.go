@@ -25,6 +25,41 @@ func newInstance(t *testing.T, s *Store, name string) instance.Instance {
 	return inst
 }
 
+// covers the exclusive run lock
+func TestLock(t *testing.T) {
+	t.Parallel()
+
+	s := New(t.TempDir())
+	inst := newInstance(t, s, "corekeeper")
+	if err := s.Create(inst); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	first, err := s.Lock(inst.Name)
+	if err != nil {
+		t.Fatalf("Lock() error = %v", err)
+	}
+
+	if _, err := s.Lock(inst.Name); !errors.Is(err, ErrLocked) {
+		t.Errorf("second Lock() error = %v, want ErrLocked", err)
+	}
+
+	if err := first.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	if err := first.Release(); err != nil {
+		t.Errorf("second Release() error = %v, want nil", err)
+	}
+
+	again, err := s.Lock(inst.Name)
+	if err != nil {
+		t.Fatalf("Lock() after release error = %v", err)
+	}
+	if err := again.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+}
+
 // covers create, layout, load and duplicate detection
 func TestStoreCreateLoad(t *testing.T) {
 	t.Parallel()

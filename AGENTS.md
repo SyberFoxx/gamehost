@@ -95,6 +95,11 @@ Candidates, easiest first:
 - The restore extractor rejects any tar entry that is not local to the target directory; keep that
   check when touching `internal/backup`.
 - World data lives under `-datapath`, not next to the binary. Back up that directory.
+- Each instance owns `servers/<name>/run.lock`. `serve` and every data command (`backup`, `update`,
+  `restore`, `import-world`) take it with `flock(LOCK_EX|LOCK_NB)`; do not remove the file, and do
+  not replace the lock with a state-file check. The kernel releases it when a process dies.
+- `import-world` accepts only `*.world.gzip` with a gzip header, writes into the instance's
+  `World.Index` slot, and archives `data/` first when it is not empty.
 - Setting `-port` switches the server from Steam relay (SDR) to direct connect and requires
   port forwarding; leave it unset for a small friend group.
 - Project Zomboid runs `start-server.sh` from its install directory and takes `-servername`,
