@@ -9,7 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"gamehost/internal/app"
+	"github.com/syberfoxx/gamehost/internal/app"
 )
 
 func main() {

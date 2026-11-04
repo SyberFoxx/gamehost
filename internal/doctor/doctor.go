@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"text/tabwriter"
 
-	"gamehost/internal/steamcmd"
+	"github.com/syberfoxx/gamehost/internal/steamcmd"
 )
 
 // Status is the outcome of one environment check.
