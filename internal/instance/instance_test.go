@@ -147,6 +147,41 @@ func TestNew(t *testing.T) {
 	}
 }
 
+// covers the scheduled backup defaults
+func TestBackupSettings(t *testing.T) {
+	t.Parallel()
+
+	inst, err := New("corekeeper", Options{
+		MaxPlayers:  4,
+		Mode:        ModeNormal,
+		BackupEvery: "24h",
+		InstallDir:  "/srv/files",
+		DataDir:     "/srv/data",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if got := inst.Backup.Interval(); got.Hours() != 24 {
+		t.Errorf("Interval() = %v, want 24h", got)
+	}
+	if got := inst.Backup.Retention(); got != DefaultBackupKeep {
+		t.Errorf("Retention() = %d, want %d", got, DefaultBackupKeep)
+	}
+
+	off, err := New("idle", Options{
+		MaxPlayers: 4,
+		Mode:       ModeNormal,
+		InstallDir: "/srv/files",
+		DataDir:    "/srv/data",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if got := off.Backup.Interval(); got != 0 {
+		t.Errorf("Interval() = %v, want zero for a disabled schedule", got)
+	}
+}
+
 // covers the game ID and password limits
 func TestValidate(t *testing.T) {
 	base := Instance{
@@ -174,6 +209,10 @@ func TestValidate(t *testing.T) {
 		{"negative world index", func(i Instance) Instance { i.World.Index = -1; return i }, true},
 		{"udp port", func(i Instance) Instance { i.Network.UDPPort = 16262; return i }, true},
 		{"admin password", func(i Instance) Instance { i.AdminPassword = "secret"; return i }, true},
+		{"scheduled backup", func(i Instance) Instance { i.Backup = Backup{Every: "24h", Keep: 3}; return i }, false},
+		{"short backup interval", func(i Instance) Instance { i.Backup = Backup{Every: "1s", Keep: 3}; return i }, true},
+		{"backup interval without a duration", func(i Instance) Instance { i.Backup = Backup{Every: "daily", Keep: 3}; return i }, true},
+		{"backup keep without an interval", func(i Instance) Instance { i.Backup = Backup{Keep: 3}; return i }, true},
 	}
 
 	for _, tt := range tests {

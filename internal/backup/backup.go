@@ -233,6 +233,60 @@ func writeExtracted(reader io.Reader, target string, mode int64) error {
 	return nil
 }
 
+// Archive describes one file in a backup directory.
+type Archive struct {
+	Name     string    `json:"name"`
+	Path     string    `json:"-"`
+	Bytes    int64     `json:"bytes"`
+	Modified time.Time `json:"modified"`
+}
+
+// List returns the archives in dir, newest first. A missing directory has no
+// archives, which is not an error.
+func List(dir string) ([]Archive, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("list backups %q: %w", dir, err)
+	}
+
+	archives := make([]Archive, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), archiveSuffix) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil, fmt.Errorf("inspect backup %q: %w", entry.Name(), err)
+		}
+		archives = append(archives, Archive{
+			Name:     entry.Name(),
+			Path:     filepath.Join(dir, entry.Name()),
+			Bytes:    info.Size(),
+			Modified: info.ModTime(),
+		})
+	}
+
+	slices.SortFunc(archives, func(a, b Archive) int {
+		if c := b.Modified.Compare(a.Modified); c != 0 {
+			return c
+		}
+		return strings.Compare(b.Name, a.Name)
+	})
+	return archives, nil
+}
+
+// Newest returns the modification time of the newest archive in dir.
+func Newest(dir string) (time.Time, bool, error) {
+	archives, err := List(dir)
+	if err != nil || len(archives) == 0 {
+		return time.Time{}, false, err
+	}
+	return archives[0].Modified, true, nil
+}
+
 // Prune deletes the oldest archives, keeping the newest keep files.
 // It returns the removed file names.
 func Prune(dir string, keep int) ([]string, error) {

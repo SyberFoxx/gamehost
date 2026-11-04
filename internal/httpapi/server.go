@@ -9,9 +9,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
+	"github.com/syberfoxx/gamehost/internal/backup"
 	"github.com/syberfoxx/gamehost/internal/games"
 	"github.com/syberfoxx/gamehost/internal/instance"
 	"github.com/syberfoxx/gamehost/internal/logs"
@@ -49,22 +52,32 @@ type Controller interface {
 	Stop(name string) error
 }
 
-// Server serves the API and the embedded panel.
-type Server struct {
-	store      *store.Store
-	controller Controller
-	mux        *http.ServeMux
+// Maintenance archives and restores the data of one instance.
+type Maintenance interface {
+	Backup(name string) (backup.Result, error)
+	Restore(name, archive string) error
 }
 
-// New returns a server for the instances in s, delegating lifecycle actions
-// to control so the API and the CLI share one implementation.
-func New(s *store.Store, control Controller) *Server {
-	srv := &Server{store: s, controller: control, mux: http.NewServeMux()}
+// Server serves the API and the embedded panel.
+type Server struct {
+	store       *store.Store
+	controller  Controller
+	maintenance Maintenance
+	mux         *http.ServeMux
+}
+
+// New returns a server for the instances in s, delegating lifecycle and data
+// actions to the adapters so the API and the CLI share one implementation.
+func New(s *store.Store, control Controller, maint Maintenance) *Server {
+	srv := &Server{store: s, controller: control, maintenance: maint, mux: http.NewServeMux()}
 	srv.mux.HandleFunc("GET /api/instances", srv.listInstances)
 	srv.mux.HandleFunc("GET /api/instances/{name}", srv.showInstance)
 	srv.mux.HandleFunc("POST /api/instances/{name}/start", srv.startInstance)
 	srv.mux.HandleFunc("POST /api/instances/{name}/stop", srv.stopInstance)
 	srv.mux.HandleFunc("GET /api/instances/{name}/logs", srv.followLogs)
+	srv.mux.HandleFunc("GET /api/instances/{name}/backups", srv.listBackups)
+	srv.mux.HandleFunc("POST /api/instances/{name}/backup", srv.createBackup)
+	srv.mux.HandleFunc("POST /api/instances/{name}/restore", srv.restoreBackup)
 	srv.mux.HandleFunc("GET /", srv.panel)
 	return srv
 }
@@ -142,6 +155,101 @@ func (s *Server) stopInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeStatus(w, inst)
+}
+
+// BackupResponse describes a fresh archive.
+type BackupResponse struct {
+	Archive string `json:"archive"`
+	Files   int    `json:"files"`
+	Bytes   int64  `json:"bytes"`
+}
+
+// listBackups returns the archives of one instance, newest first.
+func (s *Server) listBackups(w http.ResponseWriter, r *http.Request) {
+	inst, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
+	archives, err := backup.List(s.store.Layout(inst.Name).Backups)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if archives == nil {
+		archives = []backup.Archive{}
+	}
+	writeJSON(w, http.StatusOK, archives)
+}
+
+// createBackup archives the data of a stopped instance.
+func (s *Server) createBackup(w http.ResponseWriter, r *http.Request) {
+	inst, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
+	if s.refuseRunning(w, inst) {
+		return
+	}
+
+	res, err := s.maintenance.Backup(inst.Name)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, BackupResponse{
+		Archive: filepath.Base(res.Path),
+		Files:   res.Files,
+		Bytes:   res.Bytes,
+	})
+}
+
+// restoreBackup replaces the data of a stopped instance from one archive.
+func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request) {
+	inst, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
+	if s.refuseRunning(w, inst) {
+		return
+	}
+
+	var req struct {
+		Archive string `json:"archive"`
+	}
+	body := http.MaxBytesReader(w, r.Body, 4096)
+	if err := json.NewDecoder(body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "body must be {\"archive\": \"<name>.tar.gz\"}")
+		return
+	}
+	// Only a bare file name inside the backup directory is accepted.
+	if req.Archive == "" || req.Archive != filepath.Base(req.Archive) {
+		writeError(w, http.StatusBadRequest, "archive must be a file name from GET /backups")
+		return
+	}
+	if _, err := os.Stat(filepath.Join(s.store.Layout(inst.Name).Backups, req.Archive)); err != nil {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("archive %q not found", req.Archive))
+		return
+	}
+
+	if err := s.maintenance.Restore(inst.Name, req.Archive); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeStatus(w, inst)
+}
+
+// refuseRunning answers 409 when the instance has a live server.
+func (s *Server) refuseRunning(w http.ResponseWriter, inst instance.Instance) bool {
+	state, err := s.store.LoadState(inst.Name)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return true
+	}
+	if state.Running() && process.Alive(state.PID) {
+		writeError(w, http.StatusConflict, fmt.Sprintf("instance %q is running, stop it first", inst.Name))
+		return true
+	}
+	return false
 }
 
 // followLogs streams the newest log as server-sent events.

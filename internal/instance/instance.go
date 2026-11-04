@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // Supported games.
@@ -28,6 +29,12 @@ const (
 	maxPasswordLen     = 28
 	projectZomboidPort = 16261
 )
+
+// DefaultBackupKeep is how many scheduled archives an instance keeps.
+const DefaultBackupKeep = 5
+
+// minBackupEvery keeps a schedule from restarting a server in a tight loop.
+const minBackupEvery = 10 * time.Second
 
 // ErrInvalid reports a configuration that violates an invariant.
 var ErrInvalid = errors.New("invalid instance")
@@ -91,6 +98,30 @@ type Network struct {
 	Password string `json:"password"`
 }
 
+// Backup describes the scheduled snapshots of an instance.
+type Backup struct {
+	// Every is a Go duration such as "24h"; empty disables the schedule.
+	Every string `json:"every,omitempty"`
+	Keep  int    `json:"keep,omitempty"`
+}
+
+// Interval returns the backup period, or zero when the schedule is off.
+func (b Backup) Interval() time.Duration {
+	period, err := time.ParseDuration(b.Every)
+	if err != nil {
+		return 0
+	}
+	return period
+}
+
+// Retention returns how many archives the schedule keeps.
+func (b Backup) Retention() int {
+	if b.Keep > 0 {
+		return b.Keep
+	}
+	return DefaultBackupKeep
+}
+
 // Instance is one managed server.
 type Instance struct {
 	Name          string  `json:"name"`
@@ -102,6 +133,7 @@ type Instance struct {
 	MaxPlayers    int     `json:"max_players"`
 	GameID        string  `json:"game_id"`
 	AdminPassword string  `json:"admin_password,omitempty"`
+	Backup        Backup  `json:"backup"`
 }
 
 // Options carries the user-facing settings of a new instance.
@@ -116,6 +148,8 @@ type Options struct {
 	Password      string
 	AdminPassword string
 	GameID        string
+	BackupEvery   string
+	BackupKeep    int
 	InstallDir    string
 	DataDir       string
 }
@@ -161,6 +195,11 @@ func New(name string, opts Options) (Instance, error) {
 		}
 	}
 
+	backup := Backup{Every: opts.BackupEvery, Keep: opts.BackupKeep}
+	if backup.Every != "" && backup.Keep == 0 {
+		backup.Keep = DefaultBackupKeep
+	}
+
 	inst := Instance{
 		Name:          name,
 		Game:          game,
@@ -171,6 +210,7 @@ func New(name string, opts Options) (Instance, error) {
 		MaxPlayers:    opts.MaxPlayers,
 		GameID:        opts.GameID,
 		AdminPassword: opts.AdminPassword,
+		Backup:        backup,
 	}
 	if err := inst.Validate(); err != nil {
 		return Instance{}, err
@@ -198,6 +238,9 @@ func (i Instance) Validate() error {
 	}
 	if i.InstallDir == "" || i.DataDir == "" {
 		return fmt.Errorf("install and data directories are required: %w", ErrInvalid)
+	}
+	if err := i.Backup.validate(); err != nil {
+		return err
 	}
 	switch i.Game {
 	case GameCoreKeeper:
@@ -273,6 +316,28 @@ func (i Instance) validateProjectZomboid() error {
 	}
 	if i.Network.UDPPort == i.Network.Port {
 		return fmt.Errorf("game and direct ports must differ (both %d): %w", i.Network.Port, ErrInvalid)
+	}
+	return nil
+}
+
+// validate checks the scheduled snapshot settings.
+func (b Backup) validate() error {
+	if b.Every == "" {
+		if b.Keep != 0 {
+			return fmt.Errorf("backup keep %d needs a backup interval: %w", b.Keep, ErrInvalid)
+		}
+		return nil
+	}
+
+	period, err := time.ParseDuration(b.Every)
+	if err != nil {
+		return fmt.Errorf("backup interval %q is not a duration such as 24h: %w", b.Every, ErrInvalid)
+	}
+	if period < minBackupEvery {
+		return fmt.Errorf("backup interval %s is shorter than %s: %w", period, minBackupEvery, ErrInvalid)
+	}
+	if b.Keep < 1 {
+		return fmt.Errorf("backup keep %d must be at least 1: %w", b.Keep, ErrInvalid)
 	}
 	return nil
 }

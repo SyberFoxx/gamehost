@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeTree creates files below dir from a name-to-content map.
@@ -154,6 +155,63 @@ func writeEvilArchive(t *testing.T, path, name string) {
 	}
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// covers listing archives newest first
+func TestList(t *testing.T) {
+	t.Parallel()
+
+	if archives, err := List(filepath.Join(t.TempDir(), "missing")); err != nil || archives != nil {
+		t.Errorf("List(missing) = %v, %v; want nil, nil", archives, err)
+	}
+
+	dir := t.TempDir()
+	times := map[string]time.Time{
+		"2026-11-01_10-00-00.tar.gz": time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC),
+		"2026-11-02_10-00-00.tar.gz": time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC),
+		"2026-11-03_10-00-00.tar.gz": time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC),
+	}
+	files := map[string]string{"notes.txt": "not an archive"}
+	for name := range times {
+		files[name] = "archive"
+	}
+	writeTree(t, dir, files)
+	for name, stamp := range times {
+		path := filepath.Join(dir, name)
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	archives, err := List(dir)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(archives) != 3 {
+		t.Fatalf("List() returned %d archives, want 3", len(archives))
+	}
+	for i, archive := range archives {
+		if archive.Name == "notes.txt" {
+			t.Error("List() included a non-archive")
+		}
+		if archive.Bytes == 0 || archive.Path == "" {
+			t.Errorf("archive = %+v, want a size and a path", archive)
+		}
+		if i > 0 && archive.Modified.After(archives[i-1].Modified) {
+			t.Errorf("archives are not newest first: %v before %v", archives[i-1].Name, archive.Name)
+		}
+	}
+	if archives[0].Name != "2026-11-03_10-00-00.tar.gz" {
+		t.Errorf("newest = %s, want the 2026-11-03 archive", archives[0].Name)
+	}
+
+	newest, ok, err := Newest(dir)
+	if err != nil || !ok {
+		t.Fatalf("Newest() = %v, %v, %v; want a time", newest, ok, err)
+	}
+	if !newest.Equal(times["2026-11-03_10-00-00.tar.gz"]) {
+		t.Errorf("Newest() = %v, want the newest modification time", newest)
 	}
 }
 

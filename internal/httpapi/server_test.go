@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/syberfoxx/gamehost/internal/backup"
 	"github.com/syberfoxx/gamehost/internal/instance"
 	"github.com/syberfoxx/gamehost/internal/store"
 )
@@ -33,8 +34,26 @@ func (f *fakeController) Stop(name string) error {
 	return f.err
 }
 
+// fakeMaintenance records archive calls and returns fixed values.
+type fakeMaintenance struct {
+	backedUp []string
+	restored []string
+	archive  backup.Result
+	err      error
+}
+
+func (f *fakeMaintenance) Backup(name string) (backup.Result, error) {
+	f.backedUp = append(f.backedUp, name)
+	return f.archive, f.err
+}
+
+func (f *fakeMaintenance) Restore(name, archive string) error {
+	f.restored = append(f.restored, name+"/"+archive)
+	return f.err
+}
+
 // newTestServer returns a server with one instance and no state file.
-func newTestServer(t *testing.T) (*Server, *store.Store, *fakeController) {
+func newTestServer(t *testing.T) (*Server, *store.Store, *fakeController, *fakeMaintenance) {
 	t.Helper()
 
 	s := store.New(t.TempDir())
@@ -53,7 +72,8 @@ func newTestServer(t *testing.T) (*Server, *store.Store, *fakeController) {
 	}
 
 	control := &fakeController{}
-	return New(s, control), s, control
+	maint := &fakeMaintenance{}
+	return New(s, control, maint), s, control, maint
 }
 
 // decode reads a JSON response body into T.
@@ -185,7 +205,7 @@ func TestServerRoutes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			srv, _, control := newTestServer(t)
+			srv, _, control, _ := newTestServer(t)
 			control.err = tt.controlErr
 
 			rec := httptest.NewRecorder()
@@ -201,11 +221,112 @@ func TestServerRoutes(t *testing.T) {
 	}
 }
 
+// covers listing, creating and restoring archives
+func TestBackups(t *testing.T) {
+	t.Parallel()
+
+	srv, s, _, maint := newTestServer(t)
+	name := "2026-11-04_10-00-00.tar.gz"
+	maint.archive = backup.Result{Path: filepath.Join("backups", name), Files: 2, Bytes: 100}
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/instances/corekeeper/backups", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("empty list status = %d (body %q)", rec.Code, rec.Body.String())
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != "[]" {
+		t.Errorf("empty list = %q, want []", got)
+	}
+
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/instances/corekeeper/backup", nil))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("backup status = %d (body %q)", rec.Code, rec.Body.String())
+	}
+	created := decode[BackupResponse](t, rec)
+	if created.Archive != name || created.Files != 2 || created.Bytes != 100 {
+		t.Errorf("backup = %+v, want %s with 2 files", created, name)
+	}
+	if len(maint.backedUp) != 1 || maint.backedUp[0] != "corekeeper" {
+		t.Errorf("backedUp = %v, want corekeeper", maint.backedUp)
+	}
+
+	archivePath := filepath.Join(s.Layout("corekeeper").Backups, name)
+	if err := os.WriteFile(archivePath, []byte("archive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/instances/corekeeper/backups", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d (body %q)", rec.Code, rec.Body.String())
+	}
+	if archives := decode[[]backup.Archive](t, rec); len(archives) != 1 || archives[0].Name != name {
+		t.Errorf("archives = %+v, want %s", archives, name)
+	}
+
+	rec = httptest.NewRecorder()
+	body := strings.NewReader(`{"archive":"` + name + `"}`)
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/instances/corekeeper/restore", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("restore status = %d (body %q)", rec.Code, rec.Body.String())
+	}
+	if len(maint.restored) != 1 || maint.restored[0] != "corekeeper/"+name {
+		t.Errorf("restored = %v, want corekeeper/%s", maint.restored, name)
+	}
+
+	tests := []struct {
+		name string
+		body string
+		want int
+	}{
+		{"rejects a path", `{"archive":"../world.tar.gz"}`, http.StatusBadRequest},
+		{"rejects an empty archive", `{"archive":""}`, http.StatusBadRequest},
+		{"reports a missing archive", `{"archive":"missing.tar.gz"}`, http.StatusNotFound},
+		{"rejects a malformed body", `not json`, http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := strings.NewReader(tt.body)
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/instances/corekeeper/restore", body))
+			if rec.Code != tt.want {
+				t.Errorf("status = %d, want %d (body %q)", rec.Code, tt.want, rec.Body.String())
+			}
+		})
+	}
+}
+
+// covers data endpoints refusing a live server
+func TestBackupsRefuseRunningInstance(t *testing.T) {
+	t.Parallel()
+
+	srv, s, _, maint := newTestServer(t)
+	if err := s.SaveState("corekeeper", instance.State{
+		Phase: instance.PhaseRunning,
+		PID:   os.Getpid(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, action := range []string{"backup", "restore"} {
+		rec := httptest.NewRecorder()
+		body := strings.NewReader(`{"archive":"x.tar.gz"}`)
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/instances/corekeeper/"+action, body))
+		if rec.Code != http.StatusConflict {
+			t.Errorf("%s status = %d, want 409", action, rec.Code)
+		}
+	}
+	if len(maint.backedUp) != 0 || len(maint.restored) != 0 {
+		t.Errorf("maintenance ran while running: %v %v", maint.backedUp, maint.restored)
+	}
+}
+
 // covers the event stream replaying the current tail
 func TestLogStream(t *testing.T) {
 	t.Parallel()
 
-	srv, s, _ := newTestServer(t)
+	srv, s, _, _ := newTestServer(t)
 	logPath := filepath.Join(s.Layout("corekeeper").Logs, "2026-11-04_12-00-00.log")
 	if err := os.WriteFile(logPath, []byte("hello\nworld\n"), 0o644); err != nil {
 		t.Fatal(err)

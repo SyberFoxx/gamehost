@@ -100,6 +100,13 @@ Candidates, easiest first:
   not replace the lock with a state-file check. The kernel releases it when a process dies.
 - `import-world` accepts only `*.world.gzip` with a gzip header, writes into the instance's
   `World.Index` slot, and archives `data/` first when it is not empty.
+- `config` only edits `instance.json` for values the launch flags consume (players, mode, port,
+  password, game ID, admin password, backup window). Never write `ServerConfig.json`, the Project
+  Zomboid ini or `Admins.json` from it; the server owns those files.
+- The scheduled backup lives in `serve` and is a maintenance window: stop, archive, prune, start
+  again. A failed archive must still restart the server, and `--backup-every` is off by default.
+- `POST /api/instances/{name}/restore` accepts only a bare archive name from the backup directory.
+  Keep that check when touching `internal/httpapi`: it is the API's path-traversal guard.
 - Setting `-port` switches the server from Steam relay (SDR) to direct connect and requires
   port forwarding; leave it unset for a small friend group.
 - Project Zomboid runs `start-server.sh` from its install directory and takes `-servername`,

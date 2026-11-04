@@ -751,6 +751,106 @@ func TestCommandsRefuseLockedInstance(t *testing.T) {
 	}
 }
 
+// covers changing instance settings without editing JSON
+func TestConfig(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper", "--backup-every", "12h"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	s := store.New(os.Getenv("GAMEHOST_HOME"))
+	created, err := s.Load("corekeeper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Backup.Every != "12h" || created.Backup.Keep != instance.DefaultBackupKeep {
+		t.Errorf("backup = %+v, want a 12h schedule keeping %d archives", created.Backup, instance.DefaultBackupKeep)
+	}
+
+	out, err := runArgs(t, "config", "corekeeper", "--max-players", "3", "--mode", "hard", "--port", "27015", "--backup-every", "24h")
+	if err != nil {
+		t.Fatalf("config error = %v", err)
+	}
+	for _, want := range []string{"updated corekeeper", "max players", "3", "world mode", "hard", "direct", "every 24h, keep 5"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+
+	updated, err := s.Load("corekeeper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.MaxPlayers != 3 || updated.World.Mode != instance.ModeHard || updated.Network.Port != 27015 || updated.Network.Mode != instance.NetworkDirect {
+		t.Errorf("updated = %+v, want 3 players, hard mode and a direct port", updated)
+	}
+	if updated.Backup.Every != "24h" || updated.Backup.Keep != instance.DefaultBackupKeep {
+		t.Errorf("backup = %+v, want the new schedule", updated.Backup)
+	}
+
+	// Without flags, config prints the settings instead of changing anything.
+	out, err = runArgs(t, "config", "corekeeper")
+	if err != nil {
+		t.Fatalf("config error = %v", err)
+	}
+	if !strings.Contains(out, "max players") || !strings.Contains(out, "every 24h") {
+		t.Errorf("output = %q, want the current settings", out)
+	}
+
+	// Turning the schedule off drops its retention with it.
+	if _, err := runArgs(t, "config", "corekeeper", "--backup-every", "off"); err != nil {
+		t.Fatalf("config off error = %v", err)
+	}
+	updated, err = s.Load("corekeeper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Backup.Every != "" || updated.Backup.Keep != 0 {
+		t.Errorf("backup = %+v, want a disabled schedule", updated.Backup)
+	}
+
+	// An invalid change leaves the stored configuration untouched.
+	if _, err := runArgs(t, "config", "corekeeper", "--backup-keep", "3"); err == nil {
+		t.Error("config --backup-keep without an interval error = nil, want a failure")
+	}
+}
+
+// covers config rejecting settings of the other game
+func TestConfigRejectsForeignFlags(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "zomboid", "--game", "projectzomboid", "--admin-password", "secret"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+
+	if _, err := runArgs(t, "config", "zomboid", "--max-players", "4"); !errors.Is(err, ErrUsage) {
+		t.Errorf("config --max-players error = %v, want ErrUsage", err)
+	}
+	if _, err := runArgs(t, "config", "zomboid", "--udp-port", "16270"); err != nil {
+		t.Errorf("config --udp-port error = %v", err)
+	}
+}
+
+// covers config refusing a live server
+func TestConfigRefusesRunningInstance(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	s := store.New(os.Getenv("GAMEHOST_HOME"))
+	if err := s.SaveState("corekeeper", instance.State{
+		Phase: instance.PhaseRunning,
+		PID:   os.Getpid(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runArgs(t, "config", "corekeeper", "--max-players", "2"); !errors.Is(err, ErrRunning) {
+		t.Errorf("config error = %v, want ErrRunning", err)
+	}
+}
+
 // covers refusing an import while the server is alive
 func TestImportWorldRefusesRunningInstance(t *testing.T) {
 	t.Setenv("GAMEHOST_HOME", t.TempDir())

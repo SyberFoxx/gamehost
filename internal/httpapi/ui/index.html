@@ -21,6 +21,7 @@
   button { font: inherit; font-size: .78rem; padding: .18rem .6rem; color: inherit; background: #21262f; border: 1px solid #39404d; border-radius: 6px; cursor: pointer; }
   button:hover:enabled { background: #2b323d; }
   button:disabled { opacity: .4; cursor: default; }
+  select { font: inherit; font-size: .78rem; max-width: 16rem; padding: .18rem .3rem; color: inherit; background: #21262f; border: 1px solid #39404d; border-radius: 6px; }
   .actions { margin-left: auto; display: flex; gap: .4rem; }
   pre { height: 45vh; margin: 0; padding: .8rem; overflow: auto; white-space: pre-wrap; word-break: break-word; background: #0b0d11; border: 1px solid #2a2f3a; border-radius: 8px; }
   #error { color: #ff9b9b; }
@@ -48,11 +49,32 @@ function fail(message) {
 }
 
 // call one JSON endpoint and surface its error message
-async function call(path, method = 'GET') {
-  const res = await fetch(path, { method });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || res.statusText);
-  return body;
+async function call(path, method = 'GET', body = null) {
+  const init = { method };
+  if (body) {
+    init.body = body;
+    init.headers = { 'Content-Type': 'application/json' };
+  }
+  const res = await fetch(path, init);
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error || res.statusText);
+  return payload;
+}
+
+// fill the archive picker of one instance
+async function loadBackups(name, select) {
+  try {
+    const archives = await call('/api/instances/' + name + '/backups');
+    select.replaceChildren();
+    for (const archive of archives) {
+      const option = document.createElement('option');
+      option.value = archive.name;
+      option.textContent = archive.name + ' (' + Math.max(1, Math.round(archive.bytes / 1024)) + ' KiB)';
+      select.append(option);
+    }
+  } catch (err) {
+    fail(err.message);
+  }
 }
 
 // follow the log of one instance over server-sent events
@@ -69,11 +91,11 @@ function follow(name) {
   };
 }
 
-// run a lifecycle action and refresh the table
-async function act(name, action) {
+// run a lifecycle or data action and refresh the table
+async function act(name, action, body = null) {
   try {
     errorView.hidden = true;
-    await call('/api/instances/' + name + '/' + action, 'POST');
+    await call('/api/instances/' + name + '/' + action, 'POST', body);
     await refresh();
   } catch (err) {
     fail(err.message);
@@ -136,7 +158,30 @@ function render(instances) {
     log.textContent = 'log';
     log.onclick = () => follow(inst.name);
 
-    actions.append(start, stop, log);
+    const idle = inst.phase === 'stopped' || inst.phase === 'crashed';
+
+    const backupButton = document.createElement('button');
+    backupButton.textContent = 'backup';
+    backupButton.disabled = !idle;
+    backupButton.onclick = () => act(inst.name, 'backup');
+
+    const backups = document.createElement('select');
+    backups.title = 'archive to restore';
+
+    const restore = document.createElement('button');
+    restore.textContent = 'restore';
+    restore.disabled = true;
+    restore.onclick = () => {
+      const archive = backups.value;
+      if (!archive || !confirm('replace the world of ' + inst.name + ' with ' + archive + '?')) return;
+      act(inst.name, 'restore', JSON.stringify({ archive }));
+    };
+
+    loadBackups(inst.name, backups).then(() => {
+      restore.disabled = !idle || backups.options.length === 0;
+    });
+
+    actions.append(start, stop, log, backupButton, backups, restore);
     row.append(actions);
     item.append(row);
     list.append(item);

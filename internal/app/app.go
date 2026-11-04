@@ -50,10 +50,14 @@ const stopGrace = 20 * time.Second
 // logRetention is how many run logs an instance keeps.
 const logRetention = 10
 
+// defaultBackupKeep is how many archives a manual backup keeps.
+const defaultBackupKeep = 5
+
 const usage = `usage: gamehost <command> [flags] [name]
 
 commands:
   backup    archive the world data of an instance
+  config    change or print the settings of an instance
   create    create a server instance
   import-world  copy an existing world save into an instance
   install   download the server files of an instance
@@ -79,6 +83,11 @@ logs flags:
 backup flags:
   -keep N   backups to keep, oldest removed first (default 5)
 
+config flags:
+  --max-players N, --mode NAME, --port N, --password PW, --game-id ID  (corekeeper)
+  --port N, --udp-port N, --admin-password PW                        (projectzomboid)
+  --backup-every DUR, --backup-keep N    scheduled backup window, off by default
+
 serve flags:
   --addr ADDR  listen address (default 127.0.0.1:8080)
 `
@@ -101,6 +110,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runList(args[1:], stdout, stderr)
 	case "show":
 		return runShow(args[1:], stdout, stderr)
+	case "config":
+		return runConfig(args[1:], stdout, stderr)
 	case "start":
 		return runStart(ctx, args[1:], stdout, stderr)
 	case "__supervise":
@@ -141,6 +152,8 @@ func runCreate(args []string, stdout, stderr io.Writer) error {
 	password := fs.String("password", "", "join password, at most 28 characters (corekeeper only)")
 	adminPassword := fs.String("admin-password", "", "admin password (projectzomboid only)")
 	gameID := fs.String("game-id", "", "fixed game ID, 15-28 alphanumeric characters (corekeeper only)")
+	backupEvery := fs.String("backup-every", "", "scheduled backup interval such as 24h; off by default")
+	backupKeep := fs.Int("backup-keep", 0, "scheduled archives to keep (default 5)")
 	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
 		return usageError(err)
 	}
@@ -165,13 +178,18 @@ func runCreate(args []string, stdout, stderr io.Writer) error {
 		DataDir:    layout.Data,
 	}
 	set := setFlags(fs)
+	if err := rejectForeignFlags("create", *gameName, set); err != nil {
+		return err
+	}
+	every, err := parseBackupEvery(*backupEvery)
+	if err != nil {
+		return err
+	}
+	opts.BackupEvery = every
+	opts.BackupKeep = *backupKeep
+
 	switch *gameName {
 	case instance.GameCoreKeeper:
-		for _, name := range []string{"udp-port", "admin-password"} {
-			if set[name] {
-				return fmt.Errorf("create: --%s is only used by projectzomboid: %w", name, ErrUsage)
-			}
-		}
 		worldMode, err := instance.ParseMode(*mode)
 		if err != nil {
 			return err
@@ -183,11 +201,6 @@ func runCreate(args []string, stdout, stderr io.Writer) error {
 		opts.Password = *password
 		opts.GameID = *gameID
 	case instance.GameProjectZomboid:
-		for _, name := range []string{"max-players", "seed", "mode", "password", "game-id"} {
-			if set[name] {
-				return fmt.Errorf("create: --%s is only used by corekeeper: %w", name, ErrUsage)
-			}
-		}
 		opts.Port = *port
 		opts.UDPPort = *udpPort
 		opts.AdminPassword = *adminPassword
@@ -205,6 +218,52 @@ func runCreate(args []string, stdout, stderr io.Writer) error {
 
 	fmt.Fprintf(stdout, "created instance %q\n  files: %s\n  data:  %s\n", inst.Name, inst.InstallDir, inst.DataDir)
 	return nil
+}
+
+// rejectForeignFlags refuses flags that belong to the other game.
+func rejectForeignFlags(verb, game string, set map[string]bool) error {
+	foreign := []string{"udp-port", "admin-password"}
+	owner := instance.GameProjectZomboid
+	if game == instance.GameProjectZomboid {
+		foreign = []string{"max-players", "seed", "mode", "password", "game-id"}
+		owner = instance.GameCoreKeeper
+	}
+	for _, name := range foreign {
+		if set[name] {
+			return fmt.Errorf("%s: --%s is only used by %s: %w", verb, name, owner, ErrUsage)
+		}
+	}
+	return nil
+}
+
+// parseBackupEvery accepts a duration or an explicit switch-off value.
+func parseBackupEvery(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "", "off", "none", "0":
+		return "", nil
+	}
+	return value, nil
+}
+
+// optionsOf turns an instance back into the settings a new one is built from.
+func optionsOf(inst instance.Instance) instance.Options {
+	return instance.Options{
+		Game:          inst.Game,
+		MaxPlayers:    inst.MaxPlayers,
+		WorldName:     inst.World.Name,
+		Seed:          inst.World.Seed,
+		Mode:          inst.World.Mode,
+		Port:          inst.Network.Port,
+		UDPPort:       inst.Network.UDPPort,
+		Password:      inst.Network.Password,
+		AdminPassword: inst.AdminPassword,
+		GameID:        inst.GameID,
+		BackupEvery:   inst.Backup.Every,
+		BackupKeep:    inst.Backup.Keep,
+		InstallDir:    inst.InstallDir,
+		DataDir:       inst.DataDir,
+	}
 }
 
 // runDownload installs or updates the server files of one instance.
@@ -355,7 +414,109 @@ func runShow(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	return writeRows(stdout, instanceRows(inst))
+}
+
+// runConfig changes the settings of an existing instance without editing JSON.
+func runConfig(args []string, stdout, stderr io.Writer) error {
+	fs := newFlagSet("config", stderr)
+	maxPlayers := fs.Int("max-players", 0, "maximum players, 1-8 (corekeeper only)")
+	mode := fs.String("mode", "", "world mode: normal, hard, creative or casual (corekeeper only)")
+	port := fs.Int("port", 0, "game port; 0 keeps the relay (corekeeper)")
+	udpPort := fs.Int("udp-port", 0, "direct-connect port (projectzomboid only)")
+	password := fs.String("password", "", "join password, empty clears it (corekeeper only)")
+	adminPassword := fs.String("admin-password", "", "admin password (projectzomboid only)")
+	gameID := fs.String("game-id", "", "fixed game ID, empty generates one on the next start (corekeeper only)")
+	backupEvery := fs.String("backup-every", "", "scheduled backup interval such as 24h; off disables it")
+	backupKeep := fs.Int("backup-keep", 0, "scheduled archives to keep")
+	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
+		return usageError(err)
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("config needs exactly one instance name: %w", ErrUsage)
+	}
+
+	s, inst, err := loadInstance(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+
+	set := setFlags(fs)
+	if len(set) == 0 {
+		return writeRows(stdout, instanceRows(inst))
+	}
+
+	// The server reads these settings at launch, so it must not be running.
+	release, err := requireStopped(s, inst, "config")
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	if err := rejectForeignFlags("config", inst.Game, set); err != nil {
+		return err
+	}
+	opts := optionsOf(inst)
+	switch inst.Game {
+	case instance.GameCoreKeeper:
+		if set["max-players"] {
+			opts.MaxPlayers = *maxPlayers
+		}
+		if set["mode"] {
+			worldMode, err := instance.ParseMode(*mode)
+			if err != nil {
+				return err
+			}
+			opts.Mode = worldMode
+		}
+		if set["port"] {
+			opts.Port = *port
+		}
+		if set["password"] {
+			opts.Password = *password
+		}
+		if set["game-id"] {
+			opts.GameID = *gameID
+		}
+	case instance.GameProjectZomboid:
+		if set["port"] {
+			opts.Port = *port
+		}
+		if set["udp-port"] {
+			opts.UDPPort = *udpPort
+		}
+		if set["admin-password"] {
+			opts.AdminPassword = *adminPassword
+		}
+	}
+	if set["backup-every"] {
+		every, err := parseBackupEvery(*backupEvery)
+		if err != nil {
+			return err
+		}
+		opts.BackupEvery = every
+		if every == "" {
+			opts.BackupKeep = 0
+		}
+	}
+	if set["backup-keep"] {
+		opts.BackupKeep = *backupKeep
+	}
+
+	updated, err := instance.New(inst.Name, opts)
+	if err != nil {
+		return err
+	}
+	if err := s.Save(updated); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(stdout, "updated %s\n", updated.Name)
+	return writeRows(stdout, instanceRows(updated))
+}
+
+// instanceRows returns the configuration of one instance as label and value pairs.
+func instanceRows(inst instance.Instance) [][2]string {
 	rows := [][2]string{
 		{"name", inst.Name},
 		{"game", inst.Game},
@@ -366,21 +527,35 @@ func runShow(args []string, stdout, stderr io.Writer) error {
 		{"port", fmt.Sprint(inst.Network.Port)},
 	}
 	if inst.Game == instance.GameProjectZomboid {
-		rows = append(rows,
+		return append(rows,
 			[2]string{"direct port", fmt.Sprint(inst.Network.UDPPort)},
 			[2]string{"admin password", orDefault(inst.AdminPassword, "(none)")},
 			[2]string{"max players", "from the server ini"},
-		)
-	} else {
-		rows = append(rows,
-			[2]string{"world index", fmt.Sprint(inst.World.Index)},
-			[2]string{"world mode", string(inst.World.Mode)},
-			[2]string{"seed", orDefault(inst.World.Seed, "(random)")},
-			[2]string{"max players", fmt.Sprint(inst.MaxPlayers)},
-			[2]string{"password", orDefault(inst.Network.Password, "(none)")},
-			[2]string{"game id", orDefault(inst.GameID, "(generated on first start)")},
+			[2]string{"scheduled backup", backupSummary(inst.Backup)},
 		)
 	}
+	return append(rows,
+		[2]string{"world index", fmt.Sprint(inst.World.Index)},
+		[2]string{"world mode", string(inst.World.Mode)},
+		[2]string{"seed", orDefault(inst.World.Seed, "(random)")},
+		[2]string{"max players", fmt.Sprint(inst.MaxPlayers)},
+		[2]string{"password", orDefault(inst.Network.Password, "(none)")},
+		[2]string{"game id", orDefault(inst.GameID, "(generated on first start)")},
+		[2]string{"scheduled backup", backupSummary(inst.Backup)},
+	)
+}
+
+// backupSummary describes the schedule in one cell.
+func backupSummary(b instance.Backup) string {
+	if b.Interval() == 0 {
+		return "(off)"
+	}
+	return fmt.Sprintf("every %s, keep %d", b.Every, b.Retention())
+}
+
+// writeRows prints label and value pairs as an aligned table.
+func writeRows(stdout io.Writer, rows [][2]string) error {
+	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	for _, row := range rows {
 		fmt.Fprintf(tw, "%s\t%s\n", row[0], row[1])
 	}
@@ -703,9 +878,12 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	}
 
 	server := &http.Server{
-		Handler:           httpapi.New(s, apiControl{}),
+		Handler:           httpapi.New(s, apiControl{}, apiMaintenance{}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	// The daemon owns the schedule: a backup needs a stopped server, and only a
+	// long-running process can provide the window.
+	go newBackupScheduler(s, stdout).Run(ctx)
 	fmt.Fprintf(stdout, "serving http://%s\npress Ctrl+C to stop\n", listener.Addr())
 
 	serveErr := make(chan error, 1)
@@ -729,6 +907,15 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	return nil
 }
 
+// startInstance starts one instance in the background and waits until it runs.
+func startInstance(s *store.Store, inst instance.Instance, stdout io.Writer) error {
+	_, logPath, err := prepareStart(s, inst)
+	if err != nil {
+		return err
+	}
+	return startDetached(s, inst, logPath, stdout)
+}
+
 // apiControl adapts the CLI lifecycle to the HTTP API.
 type apiControl struct{}
 
@@ -738,11 +925,7 @@ func (apiControl) Start(name string) error {
 	if err != nil {
 		return err
 	}
-	_, logPath, err := prepareStart(s, inst)
-	if err != nil {
-		return err
-	}
-	return startDetached(s, inst, logPath, io.Discard)
+	return startInstance(s, inst, io.Discard)
 }
 
 // Stop asks one instance to exit and waits for it.
@@ -754,10 +937,32 @@ func (apiControl) Stop(name string) error {
 	return stopInstance(s, inst, io.Discard)
 }
 
+// apiMaintenance adapts the CLI backup and restore to the HTTP API.
+type apiMaintenance struct{}
+
+// Backup archives one instance and reports the new archive.
+func (apiMaintenance) Backup(name string) (backup.Result, error) {
+	s, inst, err := loadInstance(name)
+	if err != nil {
+		return backup.Result{}, err
+	}
+	return backupInstance(s, inst, defaultBackupKeep, io.Discard)
+}
+
+// Restore replaces the data of one instance from one archive in its backup
+// directory. Only a bare file name is accepted, never a path.
+func (apiMaintenance) Restore(name, archive string) error {
+	s, inst, err := loadInstance(name)
+	if err != nil {
+		return err
+	}
+	return restoreInstance(s, inst, archive, io.Discard)
+}
+
 // runBackup archives the data directory of one instance.
 func runBackup(args []string, stdout, stderr io.Writer) error {
 	fs := newFlagSet("backup", stderr)
-	keep := fs.Int("keep", 5, "backups to keep")
+	keep := fs.Int("keep", defaultBackupKeep, "backups to keep")
 	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
 		return usageError(err)
 	}
@@ -769,31 +974,38 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	_, err = backupInstance(s, inst, *keep, stdout)
+	return err
+}
+
+// backupInstance archives the data of a stopped instance and applies retention.
+func backupInstance(s *store.Store, inst instance.Instance, keep int, stdout io.Writer) (backup.Result, error) {
 	release, err := requireStopped(s, inst, "backup")
 	if err != nil {
-		return err
+		return backup.Result{}, err
 	}
 	defer release()
+
 	layout := s.Layout(inst.Name)
 	if err := os.MkdirAll(layout.Backups, 0o755); err != nil {
-		return fmt.Errorf("create backup directory: %w", err)
+		return backup.Result{}, fmt.Errorf("create backup directory: %w", err)
 	}
 
 	path := filepath.Join(layout.Backups, time.Now().Format("2006-01-02_15-04-05")+".tar.gz")
 	res, err := backup.Create(path, layout.Data)
 	if err != nil {
-		return fmt.Errorf("backup instance %q: %w", inst.Name, err)
+		return backup.Result{}, fmt.Errorf("backup instance %q: %w", inst.Name, err)
 	}
 
-	removed, err := backup.Prune(layout.Backups, *keep)
+	removed, err := backup.Prune(layout.Backups, keep)
 	if err != nil {
-		return err
+		return res, err
 	}
 	fmt.Fprintf(stdout, "backed up %s: %s (%d files, %s)\n", inst.Name, res.Path, res.Files, humanBytes(res.Bytes))
 	for _, name := range removed {
 		fmt.Fprintf(stdout, "removed old backup %s\n", name)
 	}
-	return nil
+	return res, nil
 }
 
 // runRestore replaces the data directory of one instance from a backup.
@@ -810,14 +1022,21 @@ func runRestore(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	return restoreInstance(s, inst, fs.Arg(1), stdout)
+}
+
+// restoreInstance replaces the data of a stopped instance from an archive.
+// The archive is a path or a file name inside the backup directory; the stopped
+// check comes first, because it is the actionable error.
+func restoreInstance(s *store.Store, inst instance.Instance, archive string, stdout io.Writer) error {
 	release, err := requireStopped(s, inst, "restore")
 	if err != nil {
 		return err
 	}
 	defer release()
-	layout := s.Layout(inst.Name)
 
-	archivePath, err := resolveArchive(layout.Backups, fs.Arg(1))
+	layout := s.Layout(inst.Name)
+	archivePath, err := resolveArchive(layout.Backups, archive)
 	if err != nil {
 		return err
 	}

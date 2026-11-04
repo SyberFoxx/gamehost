@@ -35,6 +35,7 @@ concurrency and tests with `-race`.
 | M6 | `serve`: HTTP API and web panel | done |
 | M7 | second game driver | done |
 | M8 | operation: `import-world`, per-instance lock, log retention | done |
+| M9 | `config`, API backups and scheduled backup windows | done |
 
 ## Features
 
@@ -55,6 +56,9 @@ concurrency and tests with `-race`.
 - Imports an existing `.world.gzip` save into an instance, archiving the current world first.
 - Holds a per-instance lock, so two servers or a backup and a start can never share one world.
 - Keeps the newest ten run logs and prunes the rest.
+- Changes the settings the launch flags express with `config`, without editing JSON by hand.
+- Lists, creates and restores backups from the API and the panel, not only the terminal.
+- Runs an opt-in backup window from `serve`: stop the server, archive, prune, start it again.
 
 ## Requirements
 
@@ -123,6 +127,17 @@ game id   K85KQswu7GWLsQB
 `status` reads the session id the server writes to `GameInfo.txt` next to its binary, so friends can
 join with it. `start` records it in `state.json` when the run ends.
 
+`config` prints the settings with no flags and changes them with flags:
+
+```bash
+gamehost config corekeeper                     # print what the launcher will use
+gamehost config corekeeper --max-players 5 --backup-every 24h
+```
+
+It refuses while the server runs, because the server reads these values at launch. The world name
+and seed are fixed after creation: the save already exists. For Project Zomboid, max players and
+the join password stay in its ini.
+
 `start` without flags keeps the server in the foreground with its output on the terminal; Ctrl+C
 stops it. `start --detach` hands the server to a supervisor in its own session and returns, so the
 server survives closing the terminal. `stop` signals the whole process group, waits up to 20
@@ -130,6 +145,19 @@ seconds for a clean save, then escalates to `SIGKILL`.
 
 Without `--port` the server uses the Steam relay network, so no router configuration is needed.
 Passing `--port 27015` switches it to direct connections, which requires opening UDP ports.
+
+### Scheduled backups
+
+A backup needs a stopped server, so a schedule is a maintenance window:
+
+```bash
+gamehost config corekeeper --backup-every 24h --backup-keep 5
+gamehost serve                       # keep this running, for example under systemd
+```
+
+When the interval elapses, `serve` stops the server, writes `backups/<timestamp>.tar.gz`, prunes
+archives beyond the retention and starts the server again. A stopped server is only archived, a
+failed archive never leaves the server down, and `--backup-every off` disables the window.
 
 ### Importing an existing world
 
@@ -178,6 +206,7 @@ The test suite stops at the SteamCMD download. Once per machine, walk the whole 
 | --- | --- |
 | `gamehost doctor` | check platform, data directory, SteamCMD and display |
 | `gamehost create <name> [flags]` | create an instance and its directories |
+| `gamehost config <name> [flags]` | print or change the settings the launch flags express (stopped only) |
 | `gamehost install <name>` | download the server files with SteamCMD |
 | `gamehost update <name>` | back up the world, then re-download and validate the server files (stopped only) |
 | `gamehost start <name> [--detach]` | run the server, in the foreground or in the background |
@@ -207,6 +236,8 @@ The test suite stops at the SteamCMD download. Once per machine, walk the whole 
 | `--password` | none | join password, at most 28 characters (Core Keeper only) |
 | `--admin-password` | required | Project Zomboid admin password (Project Zomboid only) |
 | `--game-id` | generated | fixed game ID, 15–28 characters without `Y y x 0 O` (Core Keeper only) |
+| `--backup-every` | off | scheduled backup interval such as `24h`; needs `gamehost serve` running |
+| `--backup-keep` | `5` | scheduled archives to keep, oldest removed first |
 
 Flags work before or after the instance name.
 
@@ -217,8 +248,8 @@ gamehost serve
 # serving http://127.0.0.1:8080
 ```
 
-Open that address for a page with every instance, its phase and join id, start and stop buttons,
-and a live log. The same data is available as JSON and server-sent events:
+Open that address for a page with every instance, its phase and join id, start, stop, backup and
+restore controls, and a live log. The same data is available as JSON and server-sent events:
 
 | Endpoint | Behavior |
 | --- | --- |
@@ -227,6 +258,9 @@ and a live log. The same data is available as JSON and server-sent events:
 | `POST /api/instances/{name}/start` | start in the background, return once it runs |
 | `POST /api/instances/{name}/stop` | stop with the usual grace period |
 | `GET /api/instances/{name}/logs?tail=N` | log stream as server-sent events (default 100 lines) |
+| `GET /api/instances/{name}/backups` | archives in `backups/`, newest first |
+| `POST /api/instances/{name}/backup` | archive `data/`, applying the default retention of 5 |
+| `POST /api/instances/{name}/restore` | restore one archive named in the JSON body, stopped only |
 
 ```bash
 curl -s http://127.0.0.1:8080/api/instances
@@ -295,6 +329,9 @@ supervisor owns the server process, records every phase change and outlives the 
 started it. `stop` signals the server's process group; the supervisor observes the exit and writes
 the final state.
 
+`serve` is also the backup daemon: it re-reads the instances every 30 seconds, finds the ones whose
+window elapsed and drives stop, archive, prune and start through the same helpers the CLI uses.
+
 ## Data layout
 
 Everything mutable lives under `GAMEHOST_HOME` (default `~/.local/share/gamehost`):
@@ -325,6 +362,8 @@ The repository never contains generated data.
 | `start-server.sh: Permission denied` | SteamCMD kept the script without the execute bit | `chmod +x files/start-server.sh` |
 | `backup`, `restore` or `update` refuses to run | the server holds the world files | `gamehost stop <name>` first |
 | `instance is already running` or `instance is in use by another gamehost command` | the server, or a command between its check and its state write, holds `run.lock` | wait for it, or `gamehost stop <name>` if a server was left behind |
+| A scheduled backup never runs | `serve` is not running, or the interval has not elapsed since the newest archive | keep `gamehost serve` running and watch its output |
+| The server restarted by itself | a scheduled backup window stopped it to archive a consistent world | raise or disable `--backup-every` |
 | `text file busy` in tests | `fork` inherits open write descriptors | do not run write-and-exec tests in parallel |
 
 ## Development
@@ -354,6 +393,12 @@ The full design, the verified Core Keeper launch contract and the decision log l
 - **Two games behind small interfaces.** `internal/game` holds `Installer` and `Runner`, and
   `internal/games` resolves a game name to its driver; the CLI and the API never switch on the game
   name to build a command line.
+- **Configuration only edits what a flag can express.** `config` rewrites `instance.json` and leaves
+  `ServerConfig.json`, the ini and the game ID file to the server, so it cannot invent a schema it
+  does not own. The world name and seed stay immutable because the save already exists.
+- **A schedule is a maintenance window.** Backups are only consistent with the world closed, so a
+  due backup stops the server, archives, prunes and starts it again; `serve` owns that loop because
+  it is the only long-lived process.
 
 ## License
 
