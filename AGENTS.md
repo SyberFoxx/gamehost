@@ -66,6 +66,9 @@ Entry point: `cmd/gamehost`. Design and roadmap: `docs/design.md`.
   which is also why the project is Linux-only.
 - A server killed from outside by `SIGTERM`/`SIGINT` counts as a clean stop; do not report it as a
   crash.
+- `backup` and `restore` require a stopped server; Core Keeper rewrites world files in place.
+- The restore extractor rejects any tar entry that is not local to the target directory; keep that
+  check when touching `internal/backup`.
 - World data lives under `-datapath`, not next to the binary. Back up that directory.
 - Setting `-port` switches the server from Steam relay (SDR) to direct connect and requires
   port forwarding; leave it unset for a small friend group.

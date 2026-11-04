@@ -13,6 +13,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/syberfoxx/gamehost/internal/backup"
 	"github.com/syberfoxx/gamehost/internal/corekeeper"
 	"github.com/syberfoxx/gamehost/internal/doctor"
 	"github.com/syberfoxx/gamehost/internal/home"
@@ -41,10 +42,12 @@ const stopGrace = 20 * time.Second
 const usage = `usage: gamehost <command> [flags] [name]
 
 commands:
+  backup    archive the world data of an instance
   create    create a server instance
   install   download the server files of an instance
   list      list instances
   logs      print or follow the newest log of an instance
+  restore   replace the world data from a backup
   show      print one instance
   start     run a server, in the foreground or with --detach
   stop      stop a running server
@@ -59,6 +62,9 @@ start flags:
 logs flags:
   -f        follow the log until Ctrl+C
   -n N      lines to print from the end (default 100)
+
+backup flags:
+  -keep N   backups to keep, oldest removed first (default 5)
 `
 
 // Run executes one command and returns its error.
@@ -85,6 +91,10 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runStop(args[1:], stdout, stderr)
 	case "logs":
 		return runLogs(ctx, args[1:], stdout, stderr)
+	case "backup":
+		return runBackup(args[1:], stdout, stderr)
+	case "restore":
+		return runRestore(args[1:], stdout, stderr)
 	case "status":
 		return runStatus(args[1:], stdout, stderr)
 	case "doctor":
@@ -513,6 +523,141 @@ func runStop(args []string, stdout, stderr io.Writer) error {
 
 	fmt.Fprintf(stdout, "%s stopped\n", inst.Name)
 	return nil
+}
+
+// runBackup archives the data directory of one instance.
+func runBackup(args []string, stdout, stderr io.Writer) error {
+	fs := newFlagSet("backup", stderr)
+	keep := fs.Int("keep", 5, "backups to keep")
+	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
+		return usageError(err)
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("backup needs exactly one instance name: %w", ErrUsage)
+	}
+
+	s, inst, err := loadInstance(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	if err := requireStopped(s, inst, "backup"); err != nil {
+		return err
+	}
+	layout := s.Layout(inst.Name)
+	if err := os.MkdirAll(layout.Backups, 0o755); err != nil {
+		return fmt.Errorf("create backup directory: %w", err)
+	}
+
+	path := filepath.Join(layout.Backups, time.Now().Format("2006-01-02_15-04-05")+".tar.gz")
+	res, err := backup.Create(path, layout.Data)
+	if err != nil {
+		return fmt.Errorf("backup instance %q: %w", inst.Name, err)
+	}
+
+	removed, err := backup.Prune(layout.Backups, *keep)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "backed up %s: %s (%d files, %s)\n", inst.Name, res.Path, res.Files, humanBytes(res.Bytes))
+	for _, name := range removed {
+		fmt.Fprintf(stdout, "removed old backup %s\n", name)
+	}
+	return nil
+}
+
+// runRestore replaces the data directory of one instance from a backup.
+func runRestore(args []string, stdout, stderr io.Writer) error {
+	fs := newFlagSet("restore", stderr)
+	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
+		return usageError(err)
+	}
+	if fs.NArg() != 2 {
+		return fmt.Errorf("restore needs an instance name and an archive: %w", ErrUsage)
+	}
+
+	s, inst, err := loadInstance(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	if err := requireStopped(s, inst, "restore"); err != nil {
+		return err
+	}
+	layout := s.Layout(inst.Name)
+
+	archivePath, err := resolveArchive(layout.Backups, fs.Arg(1))
+	if err != nil {
+		return err
+	}
+
+	// Keep the current world before replacing it, so a bad archive is recoverable.
+	safety := ""
+	if _, err := os.Stat(layout.Data); err == nil {
+		safety = filepath.Join(layout.Backups, "pre-restore_"+time.Now().Format("2006-01-02_15-04-05")+".tar.gz")
+		if _, err := backup.Create(safety, layout.Data); err != nil {
+			return fmt.Errorf("backup the current data first: %w", err)
+		}
+	}
+
+	if err := backup.Restore(archivePath, layout.Data); err != nil {
+		return fmt.Errorf("restore instance %q: %w", inst.Name, err)
+	}
+
+	fmt.Fprintf(stdout, "restored %s from %s\n", inst.Name, archivePath)
+	if safety != "" {
+		fmt.Fprintf(stdout, "previous data saved as %s\n", safety)
+	}
+	return nil
+}
+
+// loadInstance resolves the store and loads one instance.
+func loadInstance(name string) (*store.Store, instance.Instance, error) {
+	s, err := openStore()
+	if err != nil {
+		return nil, instance.Instance{}, err
+	}
+	inst, err := s.Load(name)
+	if err != nil {
+		return nil, instance.Instance{}, err
+	}
+	return s, inst, nil
+}
+
+// requireStopped refuses an operation that needs exclusive access to the data.
+func requireStopped(s *store.Store, inst instance.Instance, action string) error {
+	state, err := s.LoadState(inst.Name)
+	if err != nil {
+		return err
+	}
+	if state.Running() && process.Alive(state.PID) {
+		return fmt.Errorf("%s instance %q: %w (pid %d), stop it first", action, inst.Name, ErrRunning, state.PID)
+	}
+	return nil
+}
+
+// resolveArchive accepts a path or a file name inside the backup directory.
+func resolveArchive(dir, arg string) (string, error) {
+	if info, err := os.Stat(arg); err == nil && !info.IsDir() {
+		return arg, nil
+	}
+	candidate := filepath.Join(dir, arg)
+	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+		return candidate, nil
+	}
+	return "", fmt.Errorf("archive %q not found", arg)
+}
+
+// humanBytes formats a byte count with a binary unit.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for value := n / unit; value >= unit; value /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGT"[exp])
 }
 
 // runLogs prints or follows the newest log of one instance.

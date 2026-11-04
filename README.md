@@ -29,8 +29,8 @@ concurrency and tests with `-race`.
 | M3 | `start` / `status`: process supervision, graceful shutdown | done |
 | M3b | `start --detach` / `stop`: background supervision | done |
 | M4 | `logs` / `logs -f`: tail and follow | done |
-| M5 | `backup` / `restore` | next |
-| M6 | `serve`: HTTP API and web panel | planned |
+| M5 | `backup` / `restore` | done |
+| M6 | `serve`: HTTP API and web panel | next |
 | M7 | second game driver | planned |
 
 ## Features
@@ -44,6 +44,8 @@ concurrency and tests with `-race`.
 - Refuses a second server on the same world, and stops a detached one from any terminal.
 - Persists the runtime phase so another terminal can see what is happening.
 - Tees server output to both the terminal and a per-run log file.
+- Archives the world into a compressed tar, prunes old copies and restores safely, keeping the
+  previous data as a pre-restore backup.
 
 ## Requirements
 
@@ -97,6 +99,7 @@ gamehost status corekeeper
 gamehost list
 gamehost logs corekeeper -f   # follow the server output
 gamehost stop corekeeper
+gamehost backup corekeeper    # archive the world
 ```
 
 ```
@@ -131,6 +134,8 @@ Passing `--port 27015` switches it to direct connections, which requires opening
 | `gamehost stop <name>` | stop a running server, waiting for a clean save |
 | `gamehost logs <name> [-n N]` | print the last `N` lines (default 100) of the newest log |
 | `gamehost logs <name> -f` | follow the log until Ctrl+C |
+| `gamehost backup <name> [-keep N]` | archive `data/`, keeping the newest `N` (default 5) |
+| `gamehost restore <name> <archive>` | replace `data/` from a backup, after saving the current one |
 | `gamehost status <name>` | report phase, pid, uptime and join information |
 | `gamehost list` | list instances |
 | `gamehost show <name>` | print the full configuration of one instance |
@@ -210,7 +215,7 @@ servers/<name>/
 ├── files/            SteamCMD install directory (the game server itself)
 ├── data/             -datapath: worlds/, ServerConfig.json, mods/, backups
 ├── logs/             one log file per run
-└── backups/          reserved for M5
+└── backups/          <timestamp>.tar.gz and pre-restore_<timestamp>.tar.gz
 ```
 
 The repository never contains generated data.
@@ -224,6 +229,7 @@ The repository never contains generated data.
 | `server is not installed` | `install` was never run | `gamehost install <name>` |
 | SteamCMD exits 0 but nothing installed | SteamCMD reports failures in its output | `install` verifies the binary on disk and fails when it is missing |
 | Assert dump after `stop` during startup | the world is still generating | wait for `Started session` in `gamehost logs -f` before stopping |
+| `backup` or `restore` refuses to run | the server holds the world files | `gamehost stop <name>` first |
 | `text file busy` in tests | `fork` inherits open write descriptors | do not run write-and-exec tests in parallel |
 
 ## Development

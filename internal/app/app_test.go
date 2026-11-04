@@ -321,3 +321,103 @@ func TestStatusFinishesStalePhases(t *testing.T) {
 		})
 	}
 }
+
+// covers a backup and restore round trip
+func TestBackupAndRestore(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	s := store.New(os.Getenv("GAMEHOST_HOME"))
+	layout := s.Layout("corekeeper")
+	world := filepath.Join(layout.Data, "worlds", "0.world.gzip")
+	if err := os.MkdirAll(filepath.Dir(world), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(world, []byte("original world"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runArgs(t, "backup", "corekeeper")
+	if err != nil {
+		t.Fatalf("backup error = %v", err)
+	}
+	if !strings.Contains(out, "backed up corekeeper") {
+		t.Errorf("backup output = %q", out)
+	}
+
+	entries, err := os.ReadDir(layout.Backups)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("backups = %d, want one", len(entries))
+	}
+	archive := entries[0].Name()
+
+	if err := os.WriteFile(world, []byte("corrupted"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Resolve the archive by name inside the backup directory.
+	out, err = runArgs(t, "restore", "corekeeper", archive)
+	if err != nil {
+		t.Fatalf("restore error = %v", err)
+	}
+	if !strings.Contains(out, "restored corekeeper") {
+		t.Errorf("restore output = %q", out)
+	}
+
+	got, err := os.ReadFile(world)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "original world" {
+		t.Errorf("world = %q, want the archived copy", got)
+	}
+
+	// A restore keeps the previous data as a safety archive.
+	entries, err = os.ReadDir(layout.Backups)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Errorf("backups = %d, want the archive and the pre-restore copy", len(entries))
+	}
+}
+
+// covers refusing backup and restore while the server is alive
+func TestBackupRefusesRunningInstance(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	sleeper, err := process.Start(process.Spec{Path: "/bin/sleep", Args: []string{"30"}})
+	if err != nil {
+		t.Fatalf("process.Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = process.Stop(sleeper.PID(), time.Second)
+		_ = sleeper.WaitContext(context.Background(), time.Second)
+	})
+
+	s := store.New(os.Getenv("GAMEHOST_HOME"))
+	if err := s.SaveState("corekeeper", instance.State{
+		Phase:     instance.PhaseRunning,
+		PID:       sleeper.PID(),
+		StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range [][]string{
+		{"backup", "corekeeper"},
+		{"restore", "corekeeper", "missing.tar.gz"},
+	} {
+		if _, err := runArgs(t, args...); !errors.Is(err, ErrRunning) {
+			t.Errorf("%v error = %v, want ErrRunning", args, err)
+		}
+	}
+}
