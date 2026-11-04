@@ -9,8 +9,21 @@ Core Keeper launch contract, architecture and roadmap.
 
 ## Status
 
-Early scaffold. `gamehost version` works; `doctor` and the rest of the roadmap are next (see the
-milestone table in the design document).
+Milestone M0 is done: `gamehost doctor` probes the platform, the data directory, SteamCMD and the
+display, and exits non-zero when the environment cannot run servers yet. The rest of the roadmap is
+in the design document.
+
+```
+$ gamehost doctor
+root: /home/ramses/.local/share/gamehost
+
+  ok    platform   linux/amd64
+  ok    data root  /home/ramses/.local/share/gamehost
+  fail  steamcmd   not found in PATH (RPM Fusion package or official tarball)
+  ok    display    :0
+
+environment is not ready
+```
 
 ## Requirements
 
@@ -36,6 +49,8 @@ make fmt    # gofmt -l -w .
 ```
 cmd/gamehost        command entry point
 internal/app        argument parsing and command dispatch
+internal/home       data directory resolution
+internal/doctor     environment probes
 internal/instance   domain model and validation
 internal/store      config and state persistence
 internal/process    process supervision

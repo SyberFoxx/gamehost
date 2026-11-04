@@ -17,10 +17,14 @@ func main() {
 	defer stop()
 
 	if err := app.Run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		if errors.Is(err, app.ErrUsage) {
+		switch {
+		case errors.Is(err, app.ErrUsage):
 			os.Exit(2)
+		case errors.Is(err, app.ErrUnhealthy):
+			os.Exit(1)
+		default:
+			fmt.Fprintf(os.Stderr, "gamehost: %v\n", err)
+			os.Exit(1)
 		}
-		fmt.Fprintf(os.Stderr, "gamehost: %v\n", err)
-		os.Exit(1)
 	}
 }
