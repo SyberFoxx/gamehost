@@ -6,6 +6,8 @@
 
 # gamehost
 
+[![CI](https://github.com/SyberFoxx/gamehost/actions/workflows/ci.yml/badge.svg)](https://github.com/SyberFoxx/gamehost/actions/workflows/ci.yml)
+
 Terminal-first manager for dedicated game servers, written in Go. The first supported game is
 **Core Keeper**: install, configure, run, inspect and back up a server for a small friend group.
 
