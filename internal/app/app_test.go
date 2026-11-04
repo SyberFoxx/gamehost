@@ -487,3 +487,91 @@ func TestCreateRejectsForeignFlags(t *testing.T) {
 		t.Errorf("create without an admin password error = %v, want ErrInvalid", err)
 	}
 }
+
+// covers the safety archive written before an update
+func TestBackupBeforeUpdate(t *testing.T) {
+	t.Parallel()
+
+	s := store.New(t.TempDir())
+	layout := s.Layout("corekeeper")
+	inst, err := instance.New("corekeeper", instance.Options{
+		MaxPlayers: 5,
+		Mode:       instance.ModeNormal,
+		InstallDir: layout.Files,
+		DataDir:    layout.Data,
+	})
+	if err != nil {
+		t.Fatalf("instance.New() error = %v", err)
+	}
+	if err := os.MkdirAll(layout.Data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(layout.Data, "ServerConfig.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	path, err := backupBeforeUpdate(s, inst, &out)
+	if err != nil {
+		t.Fatalf("backupBeforeUpdate() error = %v", err)
+	}
+	if path == "" {
+		t.Fatal("backupBeforeUpdate() returned an empty path")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("archive missing: %v", err)
+	}
+	if !strings.HasPrefix(filepath.Base(path), "pre-update_") {
+		t.Errorf("archive = %q, want a pre-update name", filepath.Base(path))
+	}
+	if !strings.Contains(out.String(), "backed up corekeeper before the update") {
+		t.Errorf("output = %q, want the backup notice", out.String())
+	}
+}
+
+// covers an instance that was never started, so it has nothing to archive
+func TestBackupBeforeUpdateWithoutData(t *testing.T) {
+	t.Parallel()
+
+	s := store.New(t.TempDir())
+	layout := s.Layout("corekeeper")
+	inst, err := instance.New("corekeeper", instance.Options{
+		MaxPlayers: 5,
+		Mode:       instance.ModeNormal,
+		InstallDir: layout.Files,
+		DataDir:    layout.Data,
+	})
+	if err != nil {
+		t.Fatalf("instance.New() error = %v", err)
+	}
+
+	var out bytes.Buffer
+	path, err := backupBeforeUpdate(s, inst, &out)
+	if err != nil {
+		t.Fatalf("backupBeforeUpdate() error = %v", err)
+	}
+	if path != "" || out.Len() != 0 {
+		t.Errorf("path = %q, output = %q; want no backup without data", path, out.String())
+	}
+}
+
+// covers update refusing a live server before touching SteamCMD
+func TestUpdateRefusesRunningInstance(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	s := store.New(os.Getenv("GAMEHOST_HOME"))
+	if err := s.SaveState("corekeeper", instance.State{
+		Phase:     instance.PhaseRunning,
+		PID:       os.Getpid(),
+		StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runArgs(t, "update", "corekeeper"); !errors.Is(err, ErrRunning) {
+		t.Errorf("update error = %v, want ErrRunning", err)
+	}
+}

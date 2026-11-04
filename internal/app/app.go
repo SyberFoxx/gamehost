@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -216,6 +217,18 @@ func runDownload(ctx context.Context, command string, args []string, stdout, std
 	if err != nil {
 		return err
 	}
+
+	// An update rewrites the server files under a running process, and the
+	// archive is only consistent while the world is closed.
+	if command == "update" {
+		if err := requireStopped(s, inst, command); err != nil {
+			return err
+		}
+		if _, err := backupBeforeUpdate(s, inst, stdout); err != nil {
+			return err
+		}
+	}
+
 	runner, err := newRunner()
 	if err != nil {
 		return err
@@ -237,6 +250,30 @@ func runDownload(ctx context.Context, command string, args []string, stdout, std
 
 	fmt.Fprintf(stdout, "%s: %s is ready\n", command, serverPath)
 	return nil
+}
+
+// backupBeforeUpdate archives the data directory so an update can be undone.
+// It returns an empty path when the instance has no data yet.
+func backupBeforeUpdate(s *store.Store, inst instance.Instance, stdout io.Writer) (string, error) {
+	layout := s.Layout(inst.Name)
+	if _, err := os.Stat(layout.Data); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", nil
+		}
+		return "", fmt.Errorf("inspect data directory of %q: %w", inst.Name, err)
+	}
+	if err := os.MkdirAll(layout.Backups, 0o755); err != nil {
+		return "", fmt.Errorf("create backup directory: %w", err)
+	}
+
+	path := filepath.Join(layout.Backups, "pre-update_"+time.Now().Format("2006-01-02_15-04-05")+".tar.gz")
+	res, err := backup.Create(path, layout.Data)
+	if err != nil {
+		return "", fmt.Errorf("backup %q before the update: %w", inst.Name, err)
+	}
+	fmt.Fprintf(stdout, "backed up %s before the update: %s (%d files, %s)\n",
+		inst.Name, res.Path, res.Files, humanBytes(res.Bytes))
+	return res.Path, nil
 }
 
 // runList prints every instance as a table.

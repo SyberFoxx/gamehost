@@ -40,6 +40,24 @@ Entry point: `cmd/gamehost`. Design and roadmap: `docs/design.md`.
 - Changes to launch flags, paths or the state machine must update `docs/design.md` in the same change.
 - One milestone per work unit: code, tests and docs together.
 
+## Games and drivers
+
+Supported today: Core Keeper (Steam app `1963720`) and Project Zomboid (`380870`).
+A game is one driver package plus one entry in `internal/games`; verify its contract in the official
+documentation and record the facts in `docs/design.md` before writing flags.
+
+Candidates, easiest first:
+
+| Game | Install | What the driver needs |
+| --- | --- | --- |
+| Terraria (`105600`) | SteamCMD anonymous (verify) | `-world`, `-worldname`, `-autocreate`, `-port`, `-maxplayers`, `-password`; the first start creates the world; join by IP:7777 |
+| Valheim (`896660`) | SteamCMD anonymous | `valheim_server.x86_64` with `-name -port -world -password -public`; needs `SteamAppId=892970` and `steamclient.so`; also needs `Env` in `game.Launch` |
+| Palworld (`2394010`) | SteamCMD anonymous plus app `1007` libs | `PalServer.sh`, `PalWorldSettings.ini`, 8211 UDP plus the 27015 query port; memory hungry |
+| Don't Starve Together (`343050`) | SteamCMD anonymous | requires a cluster token up front and `cluster.ini`; the token breaks a one-shot `create` |
+| tModLoader (`1281930`) | SteamCMD anonymous | Terraria with mods: same flags plus the mod loader |
+| Minecraft Java | not on Steam: Mojang or Paper jar, EULA, Java runtime | needs a general install strategy instead of SteamCMD args, `server.properties`, RCON |
+| Factorio (`427520`) | authenticated SteamCMD login, or the headless tarball from factorio.com | `factorio --start-server`, `server-settings.json`; anonymous SteamCMD does not work, so the installer needs a login or tarball path |
+
 ## Testing
 
 - Table-driven tests with `t.Run`; `t.Parallel` when there is no shared state.
@@ -70,6 +88,8 @@ Entry point: `cmd/gamehost`. Design and roadmap: `docs/design.md`.
 - A server killed from outside by `SIGTERM`/`SIGINT` counts as a clean stop; do not report it as a
   crash.
 - `backup` and `restore` require a stopped server; Core Keeper rewrites world files in place.
+- `update` also refuses a running instance and writes `backups/pre-update_<timestamp>.tar.gz` before
+  SteamCMD starts; do not weaken either check to make an update convenient.
 - `serve` binds `127.0.0.1:8080` and has no authentication; keep it on loopback and let a reverse
   proxy own access control.
 - The restore extractor rejects any tar entry that is not local to the target directory; keep that

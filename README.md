@@ -145,7 +145,7 @@ max players and the join password stay in `data/Server/base.ini`.
 | `gamehost doctor` | check platform, data directory, SteamCMD and display |
 | `gamehost create <name> [flags]` | create an instance and its directories |
 | `gamehost install <name>` | download the server files with SteamCMD |
-| `gamehost update <name>` | re-download and validate the server files |
+| `gamehost update <name>` | back up the world, then re-download and validate the server files (stopped only) |
 | `gamehost start <name> [--detach]` | run the server, in the foreground or in the background |
 | `gamehost stop <name>` | stop a running server, waiting for a clean save |
 | `gamehost logs <name> [-n N]` | print the last `N` lines (default 100) of the newest log |
@@ -287,7 +287,7 @@ The repository never contains generated data.
 | Assert dump after `stop` during startup | the world is still generating | wait for `Started session` in `gamehost logs -f` before stopping |
 | Friends cannot join a Project Zomboid server | ports `16261` and `16262` stay UDP | forward both, and allow them in the firewall |
 | `start-server.sh: Permission denied` | SteamCMD kept the script without the execute bit | `chmod +x files/start-server.sh` |
-| `backup` or `restore` refuses to run | the server holds the world files | `gamehost stop <name>` first |
+| `backup`, `restore` or `update` refuses to run | the server holds the world files | `gamehost stop <name>` first |
 | `text file busy` in tests | `fork` inherits open write descriptors | do not run write-and-exec tests in parallel |
 
 ## Development
