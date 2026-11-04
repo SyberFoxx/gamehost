@@ -48,6 +48,9 @@ Entry point: `cmd/gamehost`. Design and roadmap: `docs/design.md`.
 
 ## Known traps
 
+- SteamCMD ships a 32-bit client (`linux32/steamcmd`); a minimal distribution without 32-bit
+  runtime libraries fails before reaching its prompt.
+- SteamCMD self-updates on every invocation; do not treat output as silence or assume fast startup.
 - The server must run with its install directory as working directory; `GameID.txt` is written there.
 - World data lives under `-datapath`, not next to the binary. Back up that directory.
 - Setting `-port` switches the server from Steam relay (SDR) to direct connect and requires
