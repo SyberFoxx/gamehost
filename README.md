@@ -253,4 +253,4 @@ The full design, the verified Core Keeper launch contract and the decision log l
 
 ## License
 
-No license has been chosen yet. Until one is added, all rights are reserved.
+MIT. See [LICENSE](LICENSE).
