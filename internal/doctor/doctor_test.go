@@ -38,21 +38,21 @@ func TestPlatform(t *testing.T) {
 func TestSteamcmd(t *testing.T) {
 	tests := []struct {
 		name       string
-		look       func(string) (string, error)
+		locate     func() (string, error)
 		wantStatus Status
 		wantDetail string
 	}{
 		{
 			name:       "found",
-			look:       func(string) (string, error) { return "/usr/bin/steamcmd", nil },
+			locate:     func() (string, error) { return "/usr/bin/steamcmd", nil },
 			wantStatus: OK,
 			wantDetail: "/usr/bin/steamcmd",
 		},
 		{
 			name:       "missing",
-			look:       func(string) (string, error) { return "", errors.New("not found") },
+			locate:     func() (string, error) { return "", errors.New("not found") },
 			wantStatus: Fail,
-			wantDetail: "not found in PATH",
+			wantDetail: "not found",
 		},
 	}
 
@@ -60,7 +60,7 @@ func TestSteamcmd(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := steamcmd(tt.look)
+			got := checkSteamcmd(tt.locate)
 			if got.Status != tt.wantStatus {
 				t.Errorf("steamcmd() status = %v, want %v", got.Status, tt.wantStatus)
 			}

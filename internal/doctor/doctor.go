@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"runtime"
 	"text/tabwriter"
+
+	"gamehost/internal/steamcmd"
 )
 
 // Status is the outcome of one environment check.
@@ -67,7 +68,7 @@ func Run(root string) Report {
 		Checks: []Check{
 			platform(runtime.GOOS, runtime.GOARCH),
 			rootWritable(root),
-			steamcmd(exec.LookPath),
+			checkSteamcmd(steamcmd.Locate),
 			display(os.Getenv),
 		},
 	}
@@ -134,13 +135,13 @@ func rootWritable(root string) Check {
 	return c
 }
 
-// steamcmd resolves the SteamCMD executable through the injected lookup.
-func steamcmd(look func(string) (string, error)) Check {
+// checkSteamcmd resolves SteamCMD through the injected locator.
+func checkSteamcmd(locate func() (string, error)) Check {
 	c := Check{Name: "steamcmd", Required: true}
-	path, err := look("steamcmd")
+	path, err := locate()
 	if err != nil {
 		c.Status = Fail
-		c.Detail = "not found in PATH (RPM Fusion package or official tarball)"
+		c.Detail = "not found (set " + steamcmd.EnvPath + " or install the official tarball)"
 		return c
 	}
 	c.Status = OK
