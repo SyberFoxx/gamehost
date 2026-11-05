@@ -273,12 +273,25 @@ func uptime(item Item) string {
 	if elapsed < 0 {
 		return ""
 	}
-	// Minutes are enough precision for "how long has this been up"; seconds
-	// only matter in the first minute.
+	return formatUptime(elapsed)
+}
+
+// formatUptime renders a duration at the precision a player cares about:
+// seconds in the first minute, minutes after that.
+func formatUptime(elapsed time.Duration) string {
 	if elapsed < time.Minute {
 		return elapsed.Round(time.Second).String()
 	}
-	return elapsed.Round(time.Minute).String()
+	minutes := int(elapsed.Minutes())
+	hours, rest := minutes/60, minutes%60
+	switch {
+	case hours == 0:
+		return fmt.Sprintf("%dm", rest)
+	case rest == 0:
+		return fmt.Sprintf("%dh", hours)
+	default:
+		return fmt.Sprintf("%dh%02dm", hours, rest)
+	}
 }
 
 // clip cuts a line to the terminal width, marking the cut.

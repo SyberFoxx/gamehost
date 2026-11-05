@@ -132,6 +132,68 @@ func TestLogsViewWithoutLogsSaysWhatToDo(t *testing.T) {
 	}
 }
 
+func TestPanelBoxIsClosed(t *testing.T) {
+	t.Parallel()
+	m := newLobby(t, &recorder{})
+	m.items = []Item{{
+		Name:      "Partidita",
+		Game:      "Core Keeper",
+		Phase:     "running",
+		PID:       733874,
+		StartedAt: time.Now().Add(-time.Hour),
+		JoinLabel: "game id",
+		JoinValue: "K85KQswu7GWLsQB",
+	}}
+
+	var box []string
+	for _, line := range strings.Split(m.View().Content, "\n") {
+		if strings.Contains(line, "╭") {
+			box = append(box, line)
+			continue
+		}
+		if len(box) > 0 {
+			box = append(box, line)
+			if strings.Contains(line, "╰") {
+				break
+			}
+		}
+	}
+	if len(box) < 3 {
+		t.Fatalf("the instance panel is missing:\n%s", m.View().Content)
+	}
+
+	want := lipgloss.Width(box[0])
+	for i, line := range box {
+		if got := lipgloss.Width(line); got != want {
+			t.Fatalf("panel line %d is %d columns wide, want %d: %q", i, got, want, line)
+		}
+	}
+}
+
+func TestFormatUptime(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		elapsed time.Duration
+		want    string
+	}{
+		{45 * time.Second, "45s"},
+		{90 * time.Second, "1m"},
+		{14 * time.Minute, "14m"},
+		{2*time.Hour + 14*time.Minute, "2h14m"},
+		{time.Hour, "1h"},
+		{3*time.Hour + 5*time.Minute + 30*time.Second, "3h05m"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			t.Parallel()
+			if got := formatUptime(tt.elapsed); got != tt.want {
+				t.Fatalf("formatUptime(%s) = %q, want %q", tt.elapsed, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestClipKeepsTheWidth(t *testing.T) {
 	t.Parallel()
 	if got := clip("short", 10); got != "short" {
