@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -90,11 +91,17 @@ serve flags:
 service subcommands:
   service install <name> [--enable] [--dir DIR] [--binary PATH]
   service uninstall <name> [--dir DIR]
+
+Run gamehost with no command on a terminal to open the interactive lobby.
 `
 
 // Run executes one command and returns its error.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
+		// A person at a terminal gets the lobby; everything else gets the usage.
+		if wantsLobby(args, stdout, os.Stdin) {
+			return runLobby(ctx, stdout)
+		}
 		fmt.Fprint(stderr, usage)
 		return ErrUsage
 	}

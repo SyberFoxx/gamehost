@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -133,7 +134,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.list()
 		}
 		m.bad = false
-		m.note = msg.text
+		m.note = oneLine(msg.text)
 		return m, m.list()
 
 	case logsMsg:
@@ -301,7 +302,13 @@ func quit() tea.Cmd {
 // fail records an inline error that keeps the lobby usable.
 func (m *Model) fail(note string) {
 	m.bad = true
-	m.note = note
+	m.note = oneLine(note)
+}
+
+// oneLine folds a multi-line report into a single footer line, so a backend
+// that returns a whole paragraph cannot break the layout.
+func oneLine(text string) string {
+	return strings.Join(strings.Fields(text), " ")
 }
 
 // clampItem keeps the instance selection inside the list.

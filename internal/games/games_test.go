@@ -22,6 +22,9 @@ func TestLookup(t *testing.T) {
 			if reg.Game != name || reg.Installer == nil || reg.Runner == nil {
 				t.Errorf("Lookup(%q) = %+v, want a complete registration", name, reg)
 			}
+			if reg.Label == "" {
+				t.Errorf("Lookup(%q) has no display label", name)
+			}
 		})
 	}
 

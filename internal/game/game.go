@@ -27,6 +27,7 @@ type Runner interface {
 // Registration pairs a game with its driver.
 type Registration struct {
 	Game      string
+	Label     string // display name for people, never a command-line value
 	Installer Installer
 	Runner    Runner
 }
