@@ -1126,20 +1126,12 @@ func openWorld(path string) (*os.File, error) {
 		_ = file.Close()
 		return nil, fmt.Errorf("world %q is not a regular file: %w", path, ErrUsage)
 	}
-
-	// A world save is a gzip stream; reject anything else before touching data.
-	magic := make([]byte, 2)
-	if _, err := io.ReadFull(file, magic); err != nil {
+	// The extension is the only reliable marker: current Core Keeper saves do
+	// not start with the gzip magic their name suggests, so the server stays the
+	// authority on the contents and an empty file is the one thing we reject.
+	if info.Size() == 0 {
 		_ = file.Close()
-		return nil, fmt.Errorf("read world %q: %w", path, err)
-	}
-	if magic[0] != 0x1f || magic[1] != 0x8b {
-		_ = file.Close()
-		return nil, fmt.Errorf("world %q is not gzip compressed: %w", path, ErrUsage)
-	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		_ = file.Close()
-		return nil, fmt.Errorf("rewind world %q: %w", path, err)
+		return nil, fmt.Errorf("world %q is empty: %w", path, ErrUsage)
 	}
 	return file, nil
 }

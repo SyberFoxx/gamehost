@@ -451,9 +451,10 @@ Each milestone is one work unit: code, tests and doc updates in the same commit.
 - **The kernel holds the instance lock.** A lock file plus `flock` needs no PID bookkeeping and
   survives crashes: the OS releases it when the process dies. Checking `state.json` first is still
   useful for a clear error, but it is not the guarantee.
-- **Imports validate before they touch data.** `import-world` requires a `.world.gzip` name and a
-  gzip header, archives the current `data/` and writes the save through a temporary file, so a
-  truncated download cannot replace a working world.
+- **Imports validate before they touch data.** `import-world` requires a `.world.gzip` name, a
+  regular file and a non-empty body, then archives the current `data/` and writes the save through
+  a temporary file. The save format is version-specific and does not match its name, so the server
+  is the authority on the contents and the pre-import archive is the way back.
 - **The schedule lives in the daemon.** A backup needs a stopped server, and only a long-running
   process can find that moment. `serve` already owns start and stop, so the window reuses them
   instead of teaching the supervisor a second lifecycle.

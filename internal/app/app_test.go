@@ -2,7 +2,6 @@ package app
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"errors"
 	"os"
@@ -578,22 +577,13 @@ func TestUpdateRefusesRunningInstance(t *testing.T) {
 	}
 }
 
-// writeWorld writes a gzip world save for the import tests.
+// writeWorld writes a file shaped like a Core Keeper world save.
 func writeWorld(t *testing.T, path string) {
 	t.Helper()
 
-	file, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gz := gzip.NewWriter(file)
-	if _, err := gz.Write([]byte("world")); err != nil {
-		t.Fatal(err)
-	}
-	if err := gz.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := file.Close(); err != nil {
+	// Current saves start with this header; the importer does not parse it.
+	content := append([]byte{0x8b, 0x4b, 0x00, 0x00, 0x80, 0xaa, 0xaa, 0xaa}, []byte("world")...)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -674,7 +664,7 @@ func TestImportWorldSavesCurrentData(t *testing.T) {
 	}
 }
 
-// covers rejecting a file that is not a Core Keeper world
+// covers rejecting a file that cannot be a Core Keeper world
 func TestImportWorldRejectsInvalidFile(t *testing.T) {
 	t.Setenv("GAMEHOST_HOME", t.TempDir())
 
@@ -687,12 +677,12 @@ func TestImportWorldRejectsInvalidFile(t *testing.T) {
 	if err := os.WriteFile(plain, []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	notGzip := filepath.Join(dir, "fake.world.gzip")
-	if err := os.WriteFile(notGzip, []byte("hi"), 0o644); err != nil {
+	empty := filepath.Join(dir, "empty.world.gzip")
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	for _, path := range []string{plain, notGzip} {
+	for _, path := range []string{plain, empty} {
 		if _, err := runArgs(t, "import-world", "corekeeper", path); !errors.Is(err, ErrUsage) {
 			t.Errorf("import-world %q error = %v, want ErrUsage", filepath.Base(path), err)
 		}

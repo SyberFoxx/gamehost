@@ -169,10 +169,12 @@ gamehost import-world corekeeper ~/Descargas/Cueva.world.gzip
 gamehost start corekeeper --detach
 ```
 
-`import-world` accepts only `.world.gzip` files with a gzip header, archives the current `data/`
-when it is not empty, and copies the save into the instance's slot (the `world` index shown by
+`import-world` accepts any non-empty `.world.gzip` file, archives the current `data/` when it is
+not empty, and copies the save into the instance's slot (the `world` index shown by
 `gamehost show`). Client saves live in
-`~/.config/unity3d/Pugstorm/Core Keeper/Steam/<steam-id>/worlds/<slot>.world.gzip`.
+`~/.config/unity3d/Pugstorm/Core Keeper/Steam/<steam-id>/worlds/<slot>.world.gzip`. Despite the
+name, current Core Keeper saves are not plain gzip streams, so the server decides whether a save
+is valid; the pre-import archive is the way back.
 
 A Project Zomboid server uses the same commands with `--game`:
 

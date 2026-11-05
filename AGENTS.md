@@ -98,8 +98,9 @@ Candidates, easiest first:
 - Each instance owns `servers/<name>/run.lock`. `serve` and every data command (`backup`, `update`,
   `restore`, `import-world`) take it with `flock(LOCK_EX|LOCK_NB)`; do not remove the file, and do
   not replace the lock with a state-file check. The kernel releases it when a process dies.
-- `import-world` accepts only `*.world.gzip` with a gzip header, writes into the instance's
-  `World.Index` slot, and archives `data/` first when it is not empty.
+- `import-world` accepts any non-empty `*.world.gzip` regular file, writes into the instance's
+  `World.Index` slot, and archives `data/` first when it is not empty. Core Keeper saves do not
+  start with the gzip magic their extension suggests; never re-add a header check.
 - `config` only edits `instance.json` for values the launch flags consume (players, mode, port,
   password, game ID, admin password, backup window). Never write `ServerConfig.json`, the Project
   Zomboid ini or `Admins.json` from it; the server owns those files.

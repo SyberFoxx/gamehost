@@ -19,6 +19,8 @@ func main() {
 	if err := app.Run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		switch {
 		case errors.Is(err, app.ErrUsage):
+			// A usage error still has to say what was wrong.
+			fmt.Fprintf(os.Stderr, "gamehost: %v\n", err)
 			os.Exit(2)
 		case errors.Is(err, app.ErrUnhealthy):
 			os.Exit(1)
