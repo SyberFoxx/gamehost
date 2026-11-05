@@ -52,12 +52,15 @@ behaviour), test runner `go test -race ./...`.
 
 | ID | Deliverable | Specs | Route | Status |
 | --- | --- | --- | --- | --- |
-| T1 | dependencies, `internal/tui` skeleton, `Backend`, model state and key handling | S3, S9 | inline | pending |
-| T2 | lobby screen: wordmark, instance list, status panel, footer help | S2, S8 | inline | pending |
-| T3 | actions: start, stop, backup through async commands with spinner and inline errors | S4, S5, S7, S9 | inline | pending |
-| T4 | logs screen with tail, scroll and refresh | S6 | inline | pending |
-| T5 | `internal/app/tui.go` adapter and the TTY gate in `Run` | S1, S10 | inline | pending |
-| T6 | README, `docs/design.md` and `AGENTS.md` | S11 | inline | pending |
+| T1 | dependencies, `internal/tui` skeleton, `Backend`, model state and key handling | S3, S9 | inline | done in `0a4da8d` |
+| T2 | lobby screen: wordmark, instance list, status panel, footer help | S2, S8 | inline | done in `0a4da8d` |
+| T3 | actions: start, stop, backup through async commands with spinner and inline errors | S4, S5, S7, S9 | inline | done in `0a4da8d` |
+| T4 | logs screen with tail, scroll and refresh | S6 | inline | done in `0a4da8d` |
+| T5 | `internal/app/tui.go` adapter and the TTY gate in `Run` | S1, S10 | inline | done in `e044244` |
+| T6 | README, `docs/design.md` and `AGENTS.md` | S11 | inline | done |
+
+T1 to T4 share one commit: the model cannot be exercised without a view, so splitting them would
+have meant committing a stub and rewriting it in the next commit.
 
 ## Log
 
@@ -76,3 +79,18 @@ behaviour), test runner `go test -race ./...`.
 - **L4** — The command layer already exposes typed helpers: `startDetached`, `stopInstance`,
   `backupInstance`, `prepareStart`, `loadInstance`, `requireStopped`. The lobby consumes those
   instead of parsing flags.
+- **L5** — The gate uses `charmbracelet/x/term` instead of a `ModeCharDevice` check: `/dev/null`
+  is a character device, so the cheap check would open an invisible lobby on `gamehost > /dev/null`.
+- **L6** — `game.Registration` gained a `Label` field ("Core Keeper", "Project Zomboid") so the
+  panel shows a name instead of the registry key. It is data in `games.All()`, not a switch.
+- **L7** — The join line falls back to the last session id in `state.json`, then to
+  "(set on first start)", mirroring what `status` already does: the live id only exists once the
+  server wrote it.
+- **L8** — Evidence: `go test -race ./...` green; `gofmt -l .` clean; `go vet ./...` clean;
+  `./bin/gamehost` without a TTY prints the usage and exits 2, with the new lobby hint in it;
+  driving the real binary through a pseudo-terminal renders the banner, the panel with the live
+  game id and the menu, and `q` exits with code 0.
+- **L9** — The panel looked broken for a moment while reading a captured pty stream: the view is
+  correct, the v2 renderer erases trailing cells with `ECH` instead of writing spaces, so stripping
+  escape codes shifts the right border. The regression test checks the box width on `View().Content`
+  instead, which does not depend on the renderer.
