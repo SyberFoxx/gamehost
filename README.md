@@ -36,6 +36,7 @@ concurrency and tests with `-race`.
 | M7 | second game driver | done |
 | M8 | operation: `import-world`, per-instance lock, log retention | done |
 | M9 | `config`, API backups and scheduled backup windows | done |
+| M10 | operators: `admin`, cross-site guard, `serve --start` | done |
 
 ## Features
 
@@ -59,6 +60,12 @@ concurrency and tests with `-race`.
 - Changes the settings the launch flags express with `config`, without editing JSON by hand.
 - Lists, creates and restores backups from the API and the panel, not only the terminal.
 - Runs an opt-in backup window from `serve`: stop the server, archive, prune, start it again.
+- Edits the Core Keeper admin list from the terminal, with Steam ID validation and the server's
+  own file shape.
+- Starts instances when the daemon boots, so one systemd unit brings the server back after a
+  reboot.
+- Rejects cross-site writes to the API: another page open in your browser cannot stop or restore a
+  world.
 
 ## Requirements
 
@@ -159,6 +166,58 @@ When the interval elapses, `serve` stops the server, writes `backups/<timestamp>
 archives beyond the retention and starts the server again. A stopped server is only archived, a
 failed archive never leaves the server down, and `--backup-every off` disables the window.
 
+### Admins
+
+The server keeps its admin list in `data/Admins.json` and rewrites it on exit, so edit it with the
+server stopped:
+
+```bash
+gamehost stop corekeeper
+gamehost admin add corekeeper 76561198012345678 --name "Ramsés"
+gamehost admin add corekeeper 76561198012345679 --name "Amigo" --limited
+gamehost admin list corekeeper
+gamehost admin remove corekeeper 76561198012345679
+gamehost start corekeeper --detach
+```
+
+A Steam ID64 is the 17-digit number that starts with `7656119`. `full` (privileges `2`) can use
+every admin command; `--limited` stores privileges `1`, the level the game marks as limited.
+`admin list` works while the server runs; `add` and `remove` refuse until it is stopped.
+
+### Autostart after a reboot
+
+`start --detach` survives closing the terminal, not a reboot. One systemd user unit covers both
+the autostart and the backup window, because `serve` already owns stop and start:
+
+```ini
+# ~/.config/systemd/user/gamehost.service
+[Unit]
+Description=gamehost: Core Keeper server and its backup window
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/proyectos/gamehost/bin/gamehost serve --start corekeeper
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now gamehost.service
+loginctl enable-linger "$USER"      # user units start at boot, before you log in
+journalctl --user -u gamehost -f    # daemon messages; the game log stays in the instance
+```
+
+Point `ExecStart` at wherever `go build` left the binary, and repeat `--start` for more instances.
+With `--backup-every` configured, the same process archives the world on schedule. If the game
+server crashes outside a backup window, `gamehost status` reports it and `gamehost start` brings
+it back; `serve` does not restart a crashed instance on its own.
+
 ### Importing an existing world
 
 A world created in single player, or copied from another server, can be dropped into an instance:
@@ -175,6 +234,13 @@ not empty, and copies the save into the instance's slot (the `world` index shown
 `~/.config/unity3d/Pugstorm/Core Keeper/Steam/<steam-id>/worlds/<slot>.world.gzip`. Despite the
 name, current Core Keeper saves are not plain gzip streams, so the server decides whether a save
 is valid; the pre-import archive is the way back.
+
+The imported save loads in the instance's world slot and takes its name from the instance. Rename it
+with the server stopped:
+
+```bash
+gamehost config corekeeper --world-name Partidita
+```
 
 A Project Zomboid server uses the same commands with `--game`:
 
@@ -218,7 +284,11 @@ The test suite stops at the SteamCMD download. Once per machine, walk the whole 
 | `gamehost import-world <name> <file>` | copy an existing `.world.gzip` save into the instance slot (stopped only) |
 | `gamehost backup <name> [-keep N]` | archive `data/`, keeping the newest `N` (default 5) |
 | `gamehost restore <name> <archive>` | replace `data/` from a backup, after saving the current one |
+| `gamehost admin list <name>` | print the admins stored in `data/Admins.json` |
+| `gamehost admin add <name> <steamid> [--name NAME] [--limited]` | grant admin rights (stopped only) |
+| `gamehost admin remove <name> <steamid>` | drop admin rights (stopped only) |
 | `gamehost serve [--addr]` | serve the HTTP API and web panel (default `127.0.0.1:8080`) |
+| `gamehost serve --start <name>` | start that instance when the daemon boots; repeatable |
 | `gamehost status <name>` | report phase, pid, uptime and join information |
 | `gamehost list` | list instances |
 | `gamehost show <name>` | print the full configuration of one instance |
@@ -400,7 +470,14 @@ The full design, the verified Core Keeper launch contract and the decision log l
   does not own. The world name and seed stay immutable because the save already exists.
 - **A schedule is a maintenance window.** Backups are only consistent with the world closed, so a
   due backup stops the server, archives, prunes and starts it again; `serve` owns that loop because
-  it is the only long-lived process.
+  it is the only long-lived process. The same process starts instances on boot with `--start`, so
+  a reboot needs one unit instead of two owners of the same process.
+- **The admin list belongs to the server.** Core Keeper rewrites `Admins.json` on exit, so `admin`
+  only edits it while stopped, writes it atomically in the server's own shape and renumbers the
+  entries; the manager never keeps a second copy.
+- **The panel only accepts same-origin writes.** A state-changing request must carry an `Origin`
+  that matches the host that served the page, or no browser headers at all like a CLI client, and
+  never `Sec-Fetch-Site: cross-site`. Reads stay open: a stray link cannot stop a world.
 
 ## License
 

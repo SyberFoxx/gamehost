@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/syberfoxx/gamehost/internal/backup"
@@ -84,7 +86,31 @@ func New(s *store.Store, control Controller, maint Maintenance) *Server {
 
 // ServeHTTP routes one request to its handler.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// The panel can start, stop and restore instances, so a mutation must come
+	// from the page this server served, never from another site open in the
+	// same browser.
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && !s.sameOrigin(r) {
+		writeError(w, http.StatusForbidden, "cross-site requests are not allowed")
+		return
+	}
 	s.mux.ServeHTTP(w, r)
+}
+
+// sameOrigin reports whether a request may change state. A client without
+// browser headers, such as curl, is trusted: it cannot be driven by a web page.
+func (s *Server) sameOrigin(r *http.Request) bool {
+	if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+		return false
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(u.Host, r.Host)
 }
 
 // listInstances returns every instance with its resolved phase.

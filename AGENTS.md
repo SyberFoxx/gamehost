@@ -87,7 +87,15 @@ Candidates, easiest first:
   which is also why the project is Linux-only.
 - A server killed from outside by `SIGTERM`/`SIGINT` counts as a clean stop; do not report it as a
   crash.
-- `backup` and `restore` require a stopped server; Core Keeper rewrites world files in place.
+- `backup`, `restore` and `admin add|remove` require a stopped server; Core Keeper rewrites world
+  files and `Admins.json` in place.
+- `Admins.json` is `{"adminList":[{"index":1,"privileges":2,"name":"...","steamId":765...}]}`.
+  `privileges` is `2` for full and `1` for limited, `index` is one-based and must be renumbered
+  after a removal, and `steamId` is a JSON number, not a string. Keep `internal/admins` as the only
+  writer and never hand-edit the file while the server runs.
+- State-changing HTTP requests must pass the same-origin check in `internal/httpapi`: an `Origin`
+  that matches the request host, or no browser headers, and never `Sec-Fetch-Site: cross-site`.
+  Do not add a mutating route outside the `ServeHTTP` guard.
 - `update` also refuses a running instance and writes `backups/pre-update_<timestamp>.tar.gz` before
   SteamCMD starts; do not weaken either check to make an update convenient.
 - `serve` binds `127.0.0.1:8080` and has no authentication; keep it on loopback and let a reverse

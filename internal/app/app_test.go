@@ -757,11 +757,11 @@ func TestConfig(t *testing.T) {
 		t.Errorf("backup = %+v, want a 12h schedule keeping %d archives", created.Backup, instance.DefaultBackupKeep)
 	}
 
-	out, err := runArgs(t, "config", "corekeeper", "--max-players", "3", "--mode", "hard", "--port", "27015", "--backup-every", "24h")
+	out, err := runArgs(t, "config", "corekeeper", "--max-players", "3", "--world-name", "Partidita", "--mode", "hard", "--port", "27015", "--backup-every", "24h")
 	if err != nil {
 		t.Fatalf("config error = %v", err)
 	}
-	for _, want := range []string{"updated corekeeper", "max players", "3", "world mode", "hard", "direct", "every 24h, keep 5"} {
+	for _, want := range []string{"updated corekeeper", "max players", "3", "Partidita", "world mode", "hard", "direct", "every 24h, keep 5"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
@@ -770,6 +770,9 @@ func TestConfig(t *testing.T) {
 	updated, err := s.Load("corekeeper")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if updated.World.Name != "Partidita" {
+		t.Errorf("world name = %q, want Partidita", updated.World.Name)
 	}
 	if updated.MaxPlayers != 3 || updated.World.Mode != instance.ModeHard || updated.Network.Port != 27015 || updated.Network.Mode != instance.NetworkDirect {
 		t.Errorf("updated = %+v, want 3 players, hard mode and a direct port", updated)
@@ -860,5 +863,151 @@ func TestImportWorldRefusesRunningInstance(t *testing.T) {
 	writeWorld(t, source)
 	if _, err := runArgs(t, "import-world", "corekeeper", source); !errors.Is(err, ErrRunning) {
 		t.Errorf("import-world error = %v, want ErrRunning", err)
+	}
+}
+
+// covers adding, listing and removing admins
+func TestAdminCommands(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+
+	out, err := runArgs(t, "admin", "add", "corekeeper", "76561198012345678", "--name", "Ramsés")
+	if err != nil {
+		t.Fatalf("admin add error = %v", err)
+	}
+	if !strings.Contains(out, "added admin 76561198012345678 (full") {
+		t.Errorf("admin add output = %q", out)
+	}
+	if _, err := runArgs(t, "admin", "add", "corekeeper", "76561198012345679", "--name", "Amigo", "--limited"); err != nil {
+		t.Fatalf("admin add error = %v", err)
+	}
+
+	out, err = runArgs(t, "admin", "list", "corekeeper")
+	if err != nil {
+		t.Fatalf("admin list error = %v", err)
+	}
+	for _, want := range []string{"76561198012345678", "full", "Ramsés", "76561198012345679", "limited", "Amigo"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("admin list missing %q:\n%s", want, out)
+		}
+	}
+
+	// The file keeps the shape the server writes.
+	data, err := os.ReadFile(filepath.Join(os.Getenv("GAMEHOST_HOME"), "servers", "corekeeper", "data", "Admins.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"index": 1`, `"privileges": 2`, `"steamId": 76561198012345678`} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("Admins.json missing %q:\n%s", want, data)
+		}
+	}
+
+	if out, err := runArgs(t, "admin", "remove", "corekeeper", "76561198012345678"); err != nil {
+		t.Fatalf("admin remove error = %v", err)
+	} else if !strings.Contains(out, "removed admin") {
+		t.Errorf("admin remove output = %q", out)
+	}
+	out, err = runArgs(t, "admin", "list", "corekeeper")
+	if err != nil {
+		t.Fatalf("admin list error = %v", err)
+	}
+	if strings.Contains(out, "76561198012345678") {
+		t.Errorf("admin list still shows the removed id:\n%s", out)
+	}
+
+	for _, args := range [][]string{
+		{"admin"},
+		{"admin", "add", "corekeeper", "123"},
+		{"admin", "remove", "corekeeper", "76561198099999999"},
+		{"admin", "list"},
+	} {
+		if _, err := runArgs(t, args...); err == nil {
+			t.Errorf("%v error = nil, want a failure", args)
+		}
+	}
+}
+
+// covers refusing admin changes while the server runs
+func TestAdminRefusesRunningInstance(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	sleeper, err := process.Start(process.Spec{Path: "/bin/sleep", Args: []string{"30"}})
+	if err != nil {
+		t.Fatalf("process.Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = process.Stop(sleeper.PID(), time.Second)
+		_ = sleeper.WaitContext(context.Background(), time.Second)
+	})
+
+	s := store.New(os.Getenv("GAMEHOST_HOME"))
+	if err := s.SaveState("corekeeper", instance.State{
+		Phase:     instance.PhaseRunning,
+		PID:       sleeper.PID(),
+		StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runArgs(t, "admin", "add", "corekeeper", "76561198012345678"); !errors.Is(err, ErrRunning) {
+		t.Errorf("admin add error = %v, want ErrRunning", err)
+	}
+	if _, err := runArgs(t, "admin", "remove", "corekeeper", "76561198012345678"); !errors.Is(err, ErrRunning) {
+		t.Errorf("admin remove error = %v, want ErrRunning", err)
+	}
+}
+
+// covers the instances serve starts when it boots
+func TestServeBootStarts(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	sleeper, err := process.Start(process.Spec{Path: "/bin/sleep", Args: []string{"30"}})
+	if err != nil {
+		t.Fatalf("process.Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = process.Stop(sleeper.PID(), time.Second)
+		_ = sleeper.WaitContext(context.Background(), time.Second)
+	})
+
+	s := store.New(os.Getenv("GAMEHOST_HOME"))
+	if err := s.SaveState("corekeeper", instance.State{
+		Phase:     instance.PhaseRunning,
+		PID:       sleeper.PID(),
+		StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The context is already done: serve runs its boot starts and shuts down.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	var stdout, stderr bytes.Buffer
+	err = Run(ctx, []string{
+		"serve", "--addr", "127.0.0.1:0",
+		"--start", "corekeeper",
+		"--start", "missing",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("serve error = %v", err)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "corekeeper is already running") {
+		t.Errorf("output = %q, want the already running notice", out)
+	}
+	if !strings.Contains(out, `boot start of "missing"`) {
+		t.Errorf("output = %q, want the missing instance notice", out)
 	}
 }

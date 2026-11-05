@@ -16,6 +16,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/syberfoxx/gamehost/internal/admins"
 	"github.com/syberfoxx/gamehost/internal/atomicfile"
 	"github.com/syberfoxx/gamehost/internal/backup"
 	"github.com/syberfoxx/gamehost/internal/doctor"
@@ -56,6 +57,7 @@ const defaultBackupKeep = 5
 const usage = `usage: gamehost <command> [flags] [name]
 
 commands:
+  admin     list, add or remove admins of an instance
   backup    archive the world data of an instance
   config    change or print the settings of an instance
   create    create a server instance
@@ -83,13 +85,20 @@ logs flags:
 backup flags:
   -keep N   backups to keep, oldest removed first (default 5)
 
+admin subcommands:
+  admin list <name>
+  admin add <name> <steamid> [--name NAME] [--limited]
+  admin remove <name> <steamid>
+
 config flags:
-  --max-players N, --mode NAME, --port N, --password PW, --game-id ID  (corekeeper)
+  --max-players N, --world-name NAME, --mode NAME, --port N, --password PW, --game-id ID
+                                                                    (corekeeper)
   --port N, --udp-port N, --admin-password PW                        (projectzomboid)
   --backup-every DUR, --backup-keep N    scheduled backup window, off by default
 
 serve flags:
-  --addr ADDR  listen address (default 127.0.0.1:8080)
+  --addr ADDR    listen address (default 127.0.0.1:8080)
+  --start NAME   start an instance when serve boots; repeat for more
 `
 
 // Run executes one command and returns its error.
@@ -112,6 +121,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runShow(args[1:], stdout, stderr)
 	case "config":
 		return runConfig(args[1:], stdout, stderr)
+	case "admin":
+		return runAdmin(args[1:], stdout, stderr)
 	case "start":
 		return runStart(ctx, args[1:], stdout, stderr)
 	case "__supervise":
@@ -421,6 +432,7 @@ func runShow(args []string, stdout, stderr io.Writer) error {
 func runConfig(args []string, stdout, stderr io.Writer) error {
 	fs := newFlagSet("config", stderr)
 	maxPlayers := fs.Int("max-players", 0, "maximum players, 1-8 (corekeeper only)")
+	worldName := fs.String("world-name", "", "world name shown to players (corekeeper only)")
 	mode := fs.String("mode", "", "world mode: normal, hard, creative or casual (corekeeper only)")
 	port := fs.Int("port", 0, "game port; 0 keeps the relay (corekeeper)")
 	udpPort := fs.Int("udp-port", 0, "direct-connect port (projectzomboid only)")
@@ -461,6 +473,9 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	case instance.GameCoreKeeper:
 		if set["max-players"] {
 			opts.MaxPlayers = *maxPlayers
+		}
+		if set["world-name"] {
+			opts.WorldName = *worldName
 		}
 		if set["mode"] {
 			worldMode, err := instance.ParseMode(*mode)
@@ -513,6 +528,151 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 
 	fmt.Fprintf(stdout, "updated %s\n", updated.Name)
 	return writeRows(stdout, instanceRows(updated))
+}
+
+// runAdmin lists, adds or removes the admins of a Core Keeper instance.
+func runAdmin(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("admin needs a subcommand: list, add or remove: %w", ErrUsage)
+	}
+	switch args[0] {
+	case "list":
+		return runAdminList(args[1:], stdout, stderr)
+	case "add":
+		return runAdminAdd(args[1:], stdout, stderr)
+	case "remove":
+		return runAdminRemove(args[1:], stdout, stderr)
+	default:
+		return fmt.Errorf("unknown admin subcommand %q (want list, add or remove): %w", args[0], ErrUsage)
+	}
+}
+
+// adminFile returns the Admins.json path of one instance.
+func adminFile(inst instance.Instance) string {
+	return filepath.Join(inst.DataDir, "Admins.json")
+}
+
+// runAdminList prints the current admins of one instance.
+func runAdminList(args []string, stdout, stderr io.Writer) error {
+	fs := newFlagSet("admin list", stderr)
+	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
+		return usageError(err)
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("admin list needs exactly one instance name: %w", ErrUsage)
+	}
+
+	_, inst, err := loadInstance(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	file, err := admins.Load(adminFile(inst))
+	if err != nil {
+		return err
+	}
+	if len(file.AdminList) == 0 {
+		fmt.Fprintf(stdout, "%s has no admins yet\n", inst.Name)
+		return nil
+	}
+
+	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "STEAM ID\tPRIVILEGES\tNAME")
+	for _, entry := range file.AdminList {
+		fmt.Fprintf(tw, "%d\t%s\t%s\n", entry.SteamID, admins.PrivilegeLabel(entry.Privileges), entry.Name)
+	}
+	return tw.Flush()
+}
+
+// runAdminAdd grants admin rights to one Steam account.
+func runAdminAdd(args []string, stdout, stderr io.Writer) error {
+	fs := newFlagSet("admin add", stderr)
+	name := fs.String("name", "", "player name shown in the admin list")
+	limited := fs.Bool("limited", false, "grant limited privileges instead of full")
+	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
+		return usageError(err)
+	}
+	if fs.NArg() != 2 {
+		return fmt.Errorf("admin add needs an instance name and a steam id: %w", ErrUsage)
+	}
+
+	steamID, err := admins.ParseSteamID(fs.Arg(1))
+	if err != nil {
+		return fmt.Errorf("admin add: %w: %w", ErrUsage, err)
+	}
+
+	s, inst, err := loadInstance(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	release, err := requireStopped(s, inst, "admin add")
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	privileges := admins.Full
+	if *limited {
+		privileges = admins.Limited
+	}
+
+	file, err := admins.Load(adminFile(inst))
+	if err != nil {
+		return err
+	}
+	added, err := file.Add(steamID, *name, privileges)
+	if err != nil {
+		return err
+	}
+	if err := file.Save(adminFile(inst)); err != nil {
+		return err
+	}
+
+	action := "updated"
+	if added {
+		action = "added"
+	}
+	fmt.Fprintf(stdout, "%s admin %d (%s, %s)\n", action, steamID, admins.PrivilegeLabel(privileges), inst.Name)
+	return nil
+}
+
+// runAdminRemove drops admin rights from one Steam account.
+func runAdminRemove(args []string, stdout, stderr io.Writer) error {
+	fs := newFlagSet("admin remove", stderr)
+	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
+		return usageError(err)
+	}
+	if fs.NArg() != 2 {
+		return fmt.Errorf("admin remove needs an instance name and a steam id: %w", ErrUsage)
+	}
+
+	steamID, err := admins.ParseSteamID(fs.Arg(1))
+	if err != nil {
+		return fmt.Errorf("admin remove: %w: %w", ErrUsage, err)
+	}
+
+	s, inst, err := loadInstance(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	release, err := requireStopped(s, inst, "admin remove")
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	file, err := admins.Load(adminFile(inst))
+	if err != nil {
+		return err
+	}
+	if !file.Remove(steamID) {
+		return fmt.Errorf("%d is not an admin of %q", steamID, inst.Name)
+	}
+	if err := file.Save(adminFile(inst)); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(stdout, "removed admin %d from %s\n", steamID, inst.Name)
+	return nil
 }
 
 // instanceRows returns the configuration of one instance as label and value pairs.
@@ -861,6 +1021,11 @@ func stopInstance(s *store.Store, inst instance.Instance, stdout io.Writer) erro
 func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := newFlagSet("serve", stderr)
 	addr := fs.String("addr", "127.0.0.1:8080", "listen address")
+	var boot []string
+	fs.Func("start", "instance to start when serve boots (repeatable)", func(value string) error {
+		boot = append(boot, value)
+		return nil
+	})
 	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
 		return usageError(err)
 	}
@@ -872,6 +1037,9 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if err != nil {
 		return err
 	}
+	// A reboot leaves every instance stopped; --start gives the daemon that
+	// first push so one unit can bring the server back on boot.
+	startBootInstances(s, boot, stdout)
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", *addr, err)
@@ -905,6 +1073,26 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		_ = server.Close() // a stream that outlives the grace period is cut here
 	}
 	return nil
+}
+
+// startBootInstances starts every instance named on the serve command line.
+// A failure is reported and never stops the daemon: the panel and the backup
+// schedule must come up even when one world refuses to start.
+func startBootInstances(s *store.Store, names []string, out io.Writer) {
+	for _, name := range names {
+		inst, err := s.Load(name)
+		if err != nil {
+			fmt.Fprintf(out, "boot start of %q: %v\n", name, err)
+			continue
+		}
+		if err := startInstance(s, inst, out); err != nil {
+			if errors.Is(err, ErrRunning) {
+				fmt.Fprintf(out, "%s is already running\n", name)
+				continue
+			}
+			fmt.Fprintf(out, "boot start of %q: %v\n", name, err)
+		}
+	}
 }
 
 // startInstance starts one instance in the background and waits until it runs.

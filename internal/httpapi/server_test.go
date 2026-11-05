@@ -376,3 +376,68 @@ func nextEvent(t *testing.T, reader *bufio.Reader) string {
 		}
 	}
 }
+
+// covers rejecting cross-site state changes
+func TestServeHTTPRejectsCrossSiteWrites(t *testing.T) {
+	t.Parallel()
+
+	srv, _, control, _ := newTestServer(t)
+
+	post := func(origin, site string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8080/api/instances/corekeeper/start", nil)
+		req.Host = "127.0.0.1:8080"
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		if site != "" {
+			req.Header.Set("Sec-Fetch-Site", site)
+		}
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec
+	}
+
+	tests := []struct {
+		name   string
+		origin string
+		site   string
+		want   int
+	}{
+		{"same origin", "http://127.0.0.1:8080", "", http.StatusOK},
+		{"no browser headers", "", "", http.StatusOK},
+		{"another site", "http://evil.example", "", http.StatusForbidden},
+		{"other port", "http://127.0.0.1:3000", "", http.StatusForbidden},
+		{"opaque origin", "null", "", http.StatusForbidden},
+		{"browser flagged cross-site", "http://127.0.0.1:8080", "cross-site", http.StatusForbidden},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := post(tt.origin, tt.site)
+			if rec.Code != tt.want {
+				t.Errorf("status = %d, want %d (body %s)", rec.Code, tt.want, rec.Body)
+			}
+		})
+	}
+
+	if len(control.started) != 2 {
+		t.Errorf("started = %v, want only the two allowed requests", control.started)
+	}
+}
+
+// covers reads from another origin staying allowed
+func TestServeHTTPAllowsCrossSiteReads(t *testing.T) {
+	t.Parallel()
+
+	srv, _, _, _ := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/api/instances", nil)
+	req.Host = "127.0.0.1:8080"
+	req.Header.Set("Origin", "http://evil.example")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 for a read", rec.Code)
+	}
+}
