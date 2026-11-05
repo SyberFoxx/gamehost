@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Build archives
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64; do
+            os=${target%/*}
+            arch=${target#*/}
+            name="gamehost_${TAG}_${os}_${arch}"
+            mkdir -p "dist/${name}"
+            GOOS="${os}" GOARCH="${arch}" CGO_ENABLED=0 go build \
+              -trimpath \
+              -ldflags "-s -w -X github.com/syberfoxx/gamehost/internal/app.version=${TAG}" \
+              -o "dist/${name}/gamehost" ./cmd/gamehost
+            cp README.md LICENSE "dist/${name}/"
+            tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          done
+          cd dist
+          sha256sum ./*.tar.gz | sed 's|\./||' > checksums.txt
+          cat checksums.txt
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          prerelease=""
+          case "${TAG}" in
+            *-*) prerelease="--prerelease" ;;
+          esac
+          gh release create "${TAG}" dist/*.tar.gz dist/checksums.txt \
+            --title "${TAG}" --generate-notes ${prerelease}

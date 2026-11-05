@@ -53,6 +53,7 @@ commands:
   logs      print or follow the newest log of an instance
   restore   replace the world data from a backup
   serve     serve the HTTP API and web panel
+  service   install or remove the systemd units of an instance
   show      print one instance
   start     run a server, in the foreground or with --detach
   stop      stop a running server
@@ -85,6 +86,10 @@ config flags:
 serve flags:
   --addr ADDR    listen address (default 127.0.0.1:8080)
   --start NAME   start an instance when serve boots; repeat for more
+
+service subcommands:
+  service install <name> [--enable] [--dir DIR] [--binary PATH]
+  service uninstall <name> [--dir DIR]
 `
 
 // Run executes one command and returns its error.
@@ -123,6 +128,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runRestore(args[1:], stdout, stderr)
 	case "serve":
 		return runServe(ctx, args[1:], stdout, stderr)
+	case "service":
+		return runService(args[1:], stdout, stderr)
 	case "status":
 		return runStatus(args[1:], stdout, stderr)
 	case "doctor":

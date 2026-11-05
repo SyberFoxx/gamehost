@@ -1011,3 +1011,161 @@ func TestServeBootStarts(t *testing.T) {
 		t.Errorf("output = %q, want the missing instance notice", out)
 	}
 }
+
+// covers writing the units of an instance with a backup window
+func TestServiceInstall(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+	t.Setenv("DISPLAY", ":0")
+
+	if _, err := runArgs(t, "create", "corekeeper", "--backup-every", "24h", "--backup-keep", "3"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unitDir := t.TempDir()
+
+	out, err := runArgs(t, "service", "install", "corekeeper",
+		"--dir", unitDir, "--binary", exe, "--systemctl", "/usr/bin/systemctl")
+	if err != nil {
+		t.Fatalf("service install error = %v", err)
+	}
+	if !strings.Contains(out, "wrote "+filepath.Join(unitDir, "gamehost-corekeeper.service")) {
+		t.Errorf("output = %q, want the written units", out)
+	}
+	if !strings.Contains(out, "systemctl --user enable --now gamehost-corekeeper-backup.timer") {
+		t.Errorf("output = %q, want the timer next step", out)
+	}
+
+	for _, name := range []string{
+		"gamehost-corekeeper.service",
+		"gamehost-corekeeper-backup.service",
+		"gamehost-corekeeper-backup.timer",
+	} {
+		if _, err := os.Stat(filepath.Join(unitDir, name)); err != nil {
+			t.Errorf("%s not written: %v", name, err)
+		}
+	}
+
+	mainUnit := readTestFile(t, filepath.Join(unitDir, "gamehost-corekeeper.service"))
+	for _, want := range []string{
+		"ExecStart=" + exe + " start corekeeper",
+		"Restart=on-failure",
+		"Environment=GAMEHOST_HOME=" + os.Getenv("GAMEHOST_HOME"),
+		"Environment=DISPLAY=:0",
+	} {
+		if !strings.Contains(mainUnit, want) {
+			t.Errorf("main unit missing %q:\n%s", want, mainUnit)
+		}
+	}
+	backup := readTestFile(t, filepath.Join(unitDir, "gamehost-corekeeper-backup.service"))
+	if !strings.Contains(backup, "backup corekeeper -keep 3") {
+		t.Errorf("backup unit does not keep three archives:\n%s", backup)
+	}
+	timer := readTestFile(t, filepath.Join(unitDir, "gamehost-corekeeper-backup.timer"))
+	if !strings.Contains(timer, "OnUnitActiveSec=1d") {
+		t.Errorf("timer does not run daily:\n%s", timer)
+	}
+}
+
+// covers a unit set without a backup window
+func TestServiceInstallWithoutSchedule(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unitDir := t.TempDir()
+
+	if _, err := runArgs(t, "service", "install", "corekeeper", "--dir", unitDir, "--binary", exe); err != nil {
+		t.Fatalf("service install error = %v", err)
+	}
+	entries, err := os.ReadDir(unitDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "gamehost-corekeeper.service" {
+		t.Errorf("units = %v, want only the main service", entries)
+	}
+}
+
+// covers removing the units and tolerating a missing set
+func TestServiceUninstall(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper", "--backup-every", "12h"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unitDir := t.TempDir()
+	if _, err := runArgs(t, "service", "install", "corekeeper", "--dir", unitDir, "--binary", exe); err != nil {
+		t.Fatalf("service install error = %v", err)
+	}
+
+	out, err := runArgs(t, "service", "uninstall", "corekeeper",
+		"--dir", unitDir, "--systemctl", "/nonexistent/systemctl")
+	if err != nil {
+		t.Fatalf("service uninstall error = %v", err)
+	}
+	if !strings.Contains(out, "removed "+filepath.Join(unitDir, "gamehost-corekeeper.service")) {
+		t.Errorf("output = %q, want the removed files", out)
+	}
+	entries, err := os.ReadDir(unitDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("units left behind: %v", entries)
+	}
+
+	// A second uninstall is a no-op, not a failure.
+	out, err = runArgs(t, "service", "uninstall", "corekeeper", "--dir", unitDir)
+	if err != nil {
+		t.Fatalf("second uninstall error = %v", err)
+	}
+	if !strings.Contains(out, "has no installed units") {
+		t.Errorf("output = %q, want the empty notice", out)
+	}
+}
+
+// covers service usage errors and a missing binary
+func TestServiceErrors(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+
+	tests := [][]string{
+		{"service"},
+		{"service", "nope"},
+		{"service", "install"},
+		{"service", "uninstall"},
+		{"service", "install", "corekeeper", "--binary", "/nonexistent/gamehost"},
+		{"service", "install", "missing"},
+	}
+	for _, args := range tests {
+		if _, err := runArgs(t, args...); err == nil {
+			t.Errorf("%v error = nil, want a failure", args)
+		}
+	}
+}
+
+// readTestFile returns the content of one test file.
+func readTestFile(t *testing.T, path string) string {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}

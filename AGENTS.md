@@ -112,8 +112,17 @@ Candidates, easiest first:
 - `config` only edits `instance.json` for values the launch flags consume (players, mode, port,
   password, game ID, admin password, backup window). Never write `ServerConfig.json`, the Project
   Zomboid ini or `Admins.json` from it; the server owns those files.
-- The scheduled backup lives in `serve` and is a maintenance window: stop, archive, prune, start
-  again. A failed archive must still restart the server, and `--backup-every` is off by default.
+- The scheduled backup is a maintenance window: stop, archive, prune, start again. `serve` can own
+  the loop, or `service install` can write a systemd timer for it; never both on one instance. A
+  failed archive must still restart the server, so the timer restarts in `ExecStopPost`, never in
+  `ExecStartPost`. `--backup-every` is off by default.
+- Core Keeper opens a window even with `-batchmode`. The systemd unit exports the `DISPLAY` it was
+  installed from; a headless boot needs `Xvfb` and `DISPLAY=:99 gamehost service install ...`, or
+  the unit fails before the server reaches its log.
+- `service install` renders the units with `internal/service` and is the only caller of
+  `systemctl`. Unit files are rendered text: escape `%` and `$`, quote paths with spaces, and keep
+  `KillMode=mixed` so gamehost owns the game's shutdown instead of systemd signaling the whole
+  cgroup. Reinstalling with no schedule must remove the old backup unit and timer.
 - `POST /api/instances/{name}/restore` accepts only a bare archive name from the backup directory.
   Keep that check when touching `internal/httpapi`: it is the API's path-traversal guard.
 - Setting `-port` switches the server from Steam relay (SDR) to direct connect and requires

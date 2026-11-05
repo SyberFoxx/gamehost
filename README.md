@@ -37,6 +37,7 @@ concurrency and tests with `-race`.
 | M8 | operation: `import-world`, per-instance lock, log retention | done |
 | M9 | `config`, API backups and scheduled backup windows | done |
 | M10 | operators: `admin`, cross-site guard, `serve --start` | done |
+| M11 | `service install` / `service uninstall`: systemd user units | done |
 
 ## Features
 
@@ -59,11 +60,14 @@ concurrency and tests with `-race`.
 - Keeps the newest ten run logs and prunes the rest.
 - Changes the settings the launch flags express with `config`, without editing JSON by hand.
 - Lists, creates and restores backups from the API and the panel, not only the terminal.
-- Runs an opt-in backup window from `serve`: stop the server, archive, prune, start it again.
+- Runs an opt-in backup window: `serve` owns it, or `service install` writes a systemd timer that
+  stops, archives, prunes and starts the server again.
 - Edits the Core Keeper admin list from the terminal, with Steam ID validation and the server's
   own file shape.
 - Starts instances when the daemon boots, so one systemd unit brings the server back after a
   reboot.
+- Writes its own systemd user units: the server with restart-on-crash, and a timer for the backup
+  window. No hand-edited unit file.
 - Rejects cross-site writes to the API: another page open in your browser cannot stop or restore a
   world.
 
@@ -87,6 +91,13 @@ make build
 `doctor` checks the platform, the data directory, SteamCMD and the display, and exits non-zero when
 the environment cannot run servers yet.
 
+`bin/` is not installed system-wide. Call `./bin/gamehost` from the repository, or put it on the
+PATH for the rest of the session:
+
+```bash
+export PATH="$PWD/bin:$PATH"
+```
+
 ```
 root: /home/ramses/.local/share/gamehost
 
@@ -97,6 +108,25 @@ root: /home/ramses/.local/share/gamehost
 
 environment ready
 ```
+
+## Release binaries
+
+Pushing a tag such as `v0.1.0` runs the release workflow: it tests, builds a static binary for
+`linux/amd64` and `linux/arm64`, and publishes `gamehost_<tag>_linux_<arch>.tar.gz` with the
+binary, this README and the license, plus `checksums.txt`.
+
+```bash
+tag=v0.1.0
+curl -LO "https://github.com/SyberFoxx/gamehost/releases/download/${tag}/gamehost_${tag}_linux_amd64.tar.gz"
+curl -LO "https://github.com/SyberFoxx/gamehost/releases/download/${tag}/checksums.txt"
+sha256sum --check --ignore-missing checksums.txt
+tar -xzf "gamehost_${tag}_linux_amd64.tar.gz"
+mkdir -p ~/.local/bin
+install -m 755 "gamehost_${tag}_linux_amd64/gamehost" ~/.local/bin/gamehost
+```
+
+The binary has no runtime dependencies: the build sets `CGO_ENABLED=0`, so it runs on any glibc or
+musl distribution of that architecture.
 
 ## Quick start
 
@@ -141,9 +171,10 @@ gamehost config corekeeper                     # print what the launcher will us
 gamehost config corekeeper --max-players 5 --backup-every 24h
 ```
 
-It refuses while the server runs, because the server reads these values at launch. The world name
-and seed are fixed after creation: the save already exists. For Project Zomboid, max players and
-the join password stay in its ini.
+It refuses while the server runs, because the server reads these values at launch. The world index
+is fixed after creation; `--world-name` only changes the label players see, not the save. The seed
+matters while a world is generated, so changing it on an existing save does nothing. For Project
+Zomboid, max players and the join password stay in its ini.
 
 `start` without flags keeps the server in the foreground with its output on the terminal; Ctrl+C
 stops it. `start --detach` hands the server to a supervisor in its own session and returns, so the
@@ -155,16 +186,22 @@ Passing `--port 27015` switches it to direct connections, which requires opening
 
 ### Scheduled backups
 
-A backup needs a stopped server, so a schedule is a maintenance window:
+A backup needs a stopped server, so a schedule is a maintenance window. Two owners can run it:
+
+- `gamehost serve` owns the daemon, the panel and the window itself.
+- `gamehost service install` writes a systemd timer that runs the window, so nothing has to stay in
+  a terminal.
 
 ```bash
 gamehost config corekeeper --backup-every 24h --backup-keep 5
-gamehost serve                       # keep this running, for example under systemd
+gamehost service install corekeeper --enable
 ```
 
-When the interval elapses, `serve` stops the server, writes `backups/<timestamp>.tar.gz`, prunes
-archives beyond the retention and starts the server again. A stopped server is only archived, a
-failed archive never leaves the server down, and `--backup-every off` disables the window.
+When the interval elapses, the timer stops the server, writes `backups/<timestamp>.tar.gz`, prunes
+archives beyond the retention and starts the server again. A stopped server is only archived; a
+failed archive never leaves the server down because the restart runs in `ExecStopPost`.
+`--backup-every off` plus another `service install` removes the timer. Use one owner per instance:
+a systemd timer and `serve --start` on the same instance would fight over one server.
 
 ### Admins
 
@@ -184,39 +221,60 @@ A Steam ID64 is the 17-digit number that starts with `7656119`. `full` (privileg
 every admin command; `--limited` stores privileges `1`, the level the game marks as limited.
 `admin list` works while the server runs; `add` and `remove` refuse until it is stopped.
 
-### Autostart after a reboot
+### Running it as a systemd user service
 
-`start --detach` survives closing the terminal, not a reboot. One systemd user unit covers both
-the autostart and the backup window, because `serve` already owns stop and start:
+`start --detach` survives closing the terminal, not a reboot. `service install` writes the units
+that own it: the server, plus a timer for the backup window when one is configured.
 
-```ini
-# ~/.config/systemd/user/gamehost.service
-[Unit]
-Description=gamehost: Core Keeper server and its backup window
-After=network-online.target
-Wants=network-online.target
+```bash
+cd ~/proyectos/gamehost
+make build
+./bin/gamehost service install corekeeper --enable
+```
 
-[Service]
-Type=simple
-ExecStart=%h/proyectos/gamehost/bin/gamehost serve --start corekeeper
-Restart=on-failure
-RestartSec=5
+```
+wrote /home/ramses/.config/systemd/user/gamehost-corekeeper.service
+wrote /home/ramses/.config/systemd/user/gamehost-corekeeper-backup.service
+wrote /home/ramses/.config/systemd/user/gamehost-corekeeper-backup.timer
 
-[Install]
-WantedBy=default.target
+started gamehost-corekeeper.service
+backup every 24h, keeping 5 archives
+logs: journalctl --user -u gamehost-corekeeper -f
+```
+
+`--enable` runs `daemon-reload`, enables the units and starts them. If the server is already
+running outside systemd, it only enables the unit and prints the two commands that hand it over:
+it never kills a server you started by hand. Without `--enable` it only writes the files.
+
+The main unit runs `gamehost start <name>` in the foreground with `Restart=on-failure` and
+`KillMode=mixed`, so systemd restarts a crash after five seconds and lets gamehost save before the
+30-second stop timeout. The backup unit stops the server, archives it and starts it again; the
+restart lives in `ExecStopPost`, so a failed archive still brings the server back.
+
+Core Keeper opens a window even with `-batchmode`. The unit exports the `DISPLAY` it was installed
+from, so it starts while that graphical session exists. For a headless boot, install `xvfb`, run a
+virtual display and install the unit against it:
+
+```bash
+Xvfb :99 -screen 0 1024x768x24 &
+DISPLAY=:99 ./bin/gamehost service install corekeeper --enable
 ```
 
 ```bash
-systemctl --user daemon-reload
-systemctl --user enable --now gamehost.service
-loginctl enable-linger "$USER"      # user units start at boot, before you log in
-journalctl --user -u gamehost -f    # daemon messages; the game log stays in the instance
+systemctl --user status gamehost-corekeeper.service
+journalctl --user -u gamehost-corekeeper -f   # server output; the run log stays in the instance
+systemctl --user list-timers 'gamehost-*'
+./bin/gamehost service uninstall corekeeper    # disable, stop and remove the units
 ```
 
-Point `ExecStart` at wherever `go build` left the binary, and repeat `--start` for more instances.
-With `--backup-every` configured, the same process archives the world on schedule. If the game
-server crashes outside a backup window, `gamehost status` reports it and `gamehost start` brings
-it back; `serve` does not restart a crashed instance on its own.
+User units start at boot only after you enable lingering:
+
+```bash
+loginctl enable-linger "$USER"
+```
+
+`service install` reads `--backup-every` and `--backup-keep` from the instance. Run it again after
+changing the schedule or moving the binary (`--binary PATH`).
 
 ### Importing an existing world
 
@@ -289,6 +347,8 @@ The test suite stops at the SteamCMD download. Once per machine, walk the whole 
 | `gamehost admin remove <name> <steamid>` | drop admin rights (stopped only) |
 | `gamehost serve [--addr]` | serve the HTTP API and web panel (default `127.0.0.1:8080`) |
 | `gamehost serve --start <name>` | start that instance when the daemon boots; repeatable |
+| `gamehost service install <name> [--enable]` | write the systemd user units, optionally enabling and starting them |
+| `gamehost service uninstall <name>` | disable, stop and remove those units |
 | `gamehost status <name>` | report phase, pid, uptime and join information |
 | `gamehost list` | list instances |
 | `gamehost show <name>` | print the full configuration of one instance |
@@ -469,9 +529,14 @@ The full design, the verified Core Keeper launch contract and the decision log l
   `ServerConfig.json`, the ini and the game ID file to the server, so it cannot invent a schema it
   does not own. The world name and seed stay immutable because the save already exists.
 - **A schedule is a maintenance window.** Backups are only consistent with the world closed, so a
-  due backup stops the server, archives, prunes and starts it again; `serve` owns that loop because
-  it is the only long-lived process. The same process starts instances on boot with `--start`, so
-  a reboot needs one unit instead of two owners of the same process.
+  due backup stops the server, archives, prunes and starts it again. Either `serve` owns that loop,
+  or `service install` writes a systemd timer that does; the restart lives in `ExecStopPost` so a
+  failed archive still brings the server back. Two owners on one instance are a configuration
+  error, not a feature.
+- **Units are rendered, not executed.** `internal/service` only returns file content, so the unit
+  layout is tested with `t.TempDir()` and no systemd; the CLI is the only place that runs
+  `systemctl`. Paths are quoted, `%` and `$` are escaped, and the unit uses `KillMode=mixed` so
+  gamehost, not systemd, owns the game's shutdown.
 - **The admin list belongs to the server.** Core Keeper rewrites `Admins.json` on exit, so `admin`
   only edits it while stopped, writes it atomically in the server's own shape and renumbers the
   entries; the manager never keeps a second copy.
