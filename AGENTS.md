@@ -64,6 +64,8 @@ Candidates, easiest first:
 - Always run `go test -race ./...`.
 - Filesystem tests use `t.TempDir()`, never the repository.
 - Fakes are hand-written against small interfaces.
+- The lobby is tested by sending messages to `Model.Update` and reading `View().Content`; no
+  terminal and no golden files are needed, and no test may require a TTY.
 - Real SteamCMD or server runs use the `//go:build integration` tag and are not part of the
   default suite.
 
@@ -135,3 +137,16 @@ Candidates, easiest first:
 - Project Zomboid has no game ID: players join by address and UDP port (`16261`, direct `16262`).
 - The `start-server.sh` script ships from SteamCMD; if it loses the execute bit, `start` fails with
   `permission denied` until it is `chmod +x`.
+- The lobby only opens when stdin and stdout are terminals, and the gate lives in `app.Run` so
+  `main` stays a dispatcher. Do not move it into `main`, and keep the stdin check: a redirected
+  stdin would otherwise open an invisible UI.
+- `internal/tui` imports nothing from this project; it receives a `Backend` whose fields are
+  functions. Do not import `store` or `instance` there, and never shell out to the `gamehost`
+  binary: the adapter in `internal/app/tui.go` reuses `startDetached`, `stopInstance`,
+  `backupInstance` and `logs.Tail`, which is what keeps the lobby and the CLI honest.
+- Bubble Tea v2 and Lip Gloss v2 are `charm.land/bubbletea/v2` and `charm.land/lipgloss/v2`. The
+  `github.com/charmbracelet/...` paths still resolve, but to v1: do not "fix" the import.
+- The lobby owns the alternate screen. Never write to stdout from inside it (`fmt.Println` in a
+  helper corrupts the frame); report through the model note or the error footer.
+- Terminal detection uses `charmbracelet/x/term`, not `os.ModeCharDevice`: `/dev/null` is a
+  character device too, and pointing the lobby at it hides the UI.

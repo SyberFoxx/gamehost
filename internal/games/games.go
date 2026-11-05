@@ -19,11 +19,13 @@ func All() []game.Registration {
 	return []game.Registration{
 		{
 			Game:      instance.GameCoreKeeper,
+			Label:     "Core Keeper",
 			Installer: corekeeper.Installer{},
 			Runner:    corekeeper.Runner{},
 		},
 		{
 			Game:      instance.GameProjectZomboid,
+			Label:     "Project Zomboid",
 			Installer: projectzomboid.Installer{},
 			Runner:    projectzomboid.Runner{},
 		},

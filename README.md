@@ -38,6 +38,7 @@ concurrency and tests with `-race`.
 | M9 | `config`, API backups and scheduled backup windows | done |
 | M10 | operators: `admin`, cross-site guard, `serve --start` | done |
 | M11 | `service install` / `service uninstall`: systemd user units | done |
+| M12 | interactive lobby: banner, arrow-key menu, log screen | done |
 
 ## Features
 
@@ -70,6 +71,9 @@ concurrency and tests with `-race`.
   window. No hand-edited unit file.
 - Rejects cross-site writes to the API: another page open in your browser cannot stop or restore a
   world.
+- Opens an interactive lobby when you run `gamehost` with no arguments on a terminal: a large
+  banner, the state of the selected world and a menu you drive with the arrow keys, for people who
+  do not want to memorise commands.
 
 ## Requirements
 
@@ -127,6 +131,54 @@ install -m 755 "gamehost_${tag}_linux_amd64/gamehost" ~/.local/bin/gamehost
 
 The binary has no runtime dependencies: the build sets `CGO_ENABLED=0`, so it runs on any glibc or
 musl distribution of that architecture.
+
+## Lobby
+
+Run `gamehost` with no arguments on a terminal and the lobby opens:
+
+```text
+ ██████╗   █████╗  ███╗   ███╗ ███████╗ ██╗  ██╗  ██████╗  ███████╗ ████████╗
+██╔════╝  ██╔══██╗ ████╗ ████║ ██╔════╝ ██║  ██║ ██╔═══██╗ ██╔════╝ ╚══██╔══╝
+██║  ███╗ ███████║ ██╔████╔██║ █████╗   ███████║ ██║   ██║ ███████╗    ██║
+██║   ██║ ██╔══██║ ██║╚██╔╝██║ ██╔══╝   ██╔══██║ ██║   ██║ ╚════██║    ██║
+╚██████╔╝ ██║  ██║ ██║ ╚═╝ ██║ ███████╗ ██║  ██║ ╚██████╔╝ ███████║    ██║
+ ╚═════╝  ╚═╝  ╚═╝ ╚═╝     ╚═╝ ╚══════╝ ╚═╝  ╚═╝  ╚═════╝  ╚══════╝    ╚═╝
+
+dedicated game servers without memorising flags
+
+╭────────────────────────────────────────────────────────────────────╮
+│ Partidita   Core Keeper                                            │
+│ ● running   pid 733874   up 2h14m                                  │
+│ game id K85KQswu7GWLsQB                                            │
+╰────────────────────────────────────────────────────────────────────╯
+
+› Start  run it in the background
+  Stop
+  Logs
+  Backup
+  Status
+  Quit
+
+↑↓ move    ↵ select    q quit
+```
+
+| Key | Action |
+| --- | --- |
+| `↑` `↓` or `k` `j` | move the cursor |
+| `←` `→` or `h` `l` | switch instance, when there is more than one |
+| `Enter` | run the selected action |
+| `r` | reload the state |
+| `Esc` | return from the log screen |
+| `q` or `Ctrl+C` | leave |
+
+Every entry calls the same code as the command it names, so the lobby and the terminal can never
+disagree about a phase or a grace period: `Start` uses the detached supervisor, `Stop` waits for the
+clean save, `Backup` refuses a running server, `Logs` reads the newest file. A long action shows a
+spinner and keeps the menu responsive; a failure is reported in the footer and the lobby stays
+usable.
+
+The lobby only opens when both stdin and stdout are terminals. `gamehost | head`, a redirect or a
+script still gets the usage text and exit code 2.
 
 ## Quick start
 
@@ -330,6 +382,7 @@ The test suite stops at the SteamCMD download. Once per machine, walk the whole 
 
 | Command | Purpose |
 | --- | --- |
+| `gamehost` | open the interactive lobby (terminal only) |
 | `gamehost doctor` | check platform, data directory, SteamCMD and display |
 | `gamehost create <name> [flags]` | create an instance and its directories |
 | `gamehost config <name> [flags]` | print or change the settings the launch flags express (stopped only) |
