@@ -90,7 +90,23 @@ Validated by running it on this machine:
 Still open:
 
 1. Whether running under Xvfb is worth it to hide the window on a desktop host.
-2. Exact save-file layout inside `-datapath` once a world finishes generating.
+
+Verified end to end on 2026-11-06 (Nobara Linux 44, x86_64, 12 cores, 30 GB RAM, SteamCMD
+`1792617903` running from `~/.local/share/steamcmd/steamcmd.sh`):
+
+- `gamehost install corekeeper` drives SteamCMD anonymously and ends with
+  `Success! App '1963720' fully installed.`; `files/` measures 568 MB and contains
+  `CoreKeeperServer`, `CoreKeeperServer_Data/`, `GameID.txt`, `GameInfo.txt` and the shipped
+  `ARGUMENTS.txt` and launch scripts.
+- `gamehost update corekeeper` writes `backups/pre-update_<timestamp>.tar.gz` first (4.7 MB for the
+  5 MB data directory), then revalidates in 6.3 s on a warm cache.
+- The data directory holds `ServerConfig.json`, `Admins.json`, `PlayerBans.json`, `mods/`,
+  `modloader/` and `worlds/0.world.gzip`; that answers the layout question this section used to
+  leave open.
+- `doctor` reports `platform`, `data root`, `steamcmd` and `display` as `ok` on the desktop session.
+- The lobby drove the same operations in a real pty: the install stream showed SteamCMD lines, a
+  backup created through the retention form landed in `backups/`, and the panel answered on
+  `127.0.0.1:8080` until `Esc`.
 
 ### Project Zomboid
 
@@ -429,7 +445,7 @@ Why this shape:
 | M10 | operators: admins, same-origin writes, boot start | a Steam ID becomes an admin without editing JSON, a foreign page cannot stop a world, one unit restores the server after a reboot | struct tags for an external format, `Origin` checks, repeatable flags |
 | M11 | systemd units: `service install`, `service uninstall` | one command writes, enables and starts the server and its backup timer; uninstall leaves no dangling link | text rendering with escaping, `os/exec` for systemctl, filesystem tests |
 | M12 | interactive lobby | `gamehost` with no arguments on a terminal shows the banner, the selected instance and a menu; start, stop, backup and logs work without typing a flag; a pipe still gets the usage text | the Elm architecture, terminal state ownership, presentation isolated behind a function-valued backend |
-| M13 | the lobby is the whole program | every command is reachable from the lobby: create and edit an instance, install/update with live output, follow the log, list/create/restore/import backups, admins, systemd units, `doctor` and the web panel; destructive actions confirm; `?` shows the command each key replaces | screen stack, streaming over channels, modal state, textinput, form validation at the adapter |
+| M13 | the lobby is the whole program | every command is reachable from the lobby: create and edit an instance, install/update with live output, follow the log with a selectable tail, list/create/restore/import backups with the retention form, admins, systemd units with `dir`/`binary`/`systemctl`, `doctor` with the build version and the web panel with the backup schedule and a boot start; destructive actions confirm; `?` shows the command each key replaces | screen stack, streaming over channels, modal state, textinput, form validation at the adapter |
 
 Each milestone is one work unit: code, tests and doc updates in the same commit.
 
@@ -554,7 +570,18 @@ Each milestone is one work unit: code, tests and doc updates in the same commit.
 - **The lobby owns its panel.** The web panel screen calls the same `httpapi` handler as `serve`
   through a goroutine, keeps the stop function and closes the listener when the screen or the lobby
   ends. The lobby context is the panel's lifetime, so quitting the TUI can never leave a listener
-  answering requests.
+  answering requests. It also runs the same backup scheduler and boot start, so opening the panel
+  from the lobby is `serve` with a face, not a weaker version of it.
+- **A reloaded follower retires its predecessor.** Changing the log tail cancels the old context and
+  starts a new stream from the same screen. A sequence number travels in every streamed message, so
+  the closed old channel cannot mark the new stream as done or append a line twice.
+- **Per-run options are small forms, not hidden constants.** `backup --keep` asks for the retention
+  and prefills it with the instance's scheduled keep; `service install` and `service uninstall`
+  offer `--dir`, `--binary` and `--systemctl` in an options form prefilled with the defaults. The
+  lobby never invents a value the command would not accept.
+- **Foreground `start` has no screen.** The alternate screen owns the terminal, so a server that
+  writes to stdout would corrupt the frame. The lobby always uses the detached supervisor, which is
+  the same path as `start --detach`.
 - **A destructive action asks first.** Stop, update, restore, import, uninstall and remove-admin
   replace the screen with a question that names the instance and the consequence. The dialog is a
   full screen rather than an overlay because compositing a box over styled content needs cell-level

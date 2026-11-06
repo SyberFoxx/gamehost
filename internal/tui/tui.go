@@ -32,13 +32,14 @@ type Event struct {
 
 // Item is one instance, already resolved for display.
 type Item struct {
-	Name      string
-	Game      string
-	Phase     string
-	PID       int
-	StartedAt time.Time
-	JoinLabel string
-	JoinValue string
+	Name       string
+	Game       string
+	Phase      string
+	PID        int
+	StartedAt  time.Time
+	JoinLabel  string
+	JoinValue  string
+	BackupKeep int
 }
 
 // Detail is the full configuration of one instance.
@@ -139,7 +140,7 @@ type InstanceBackend struct {
 type ServerBackend struct {
 	Start       func(ctx context.Context, name string) (string, error)
 	Stop        func(ctx context.Context, name string) (string, error)
-	Backup      func(ctx context.Context, name string) (string, error)
+	Backup      func(ctx context.Context, name string, keep int) (string, error)
 	Restore     func(ctx context.Context, name string, archive string) (string, error)
 	ImportWorld func(ctx context.Context, name, path string) (string, error)
 	Backups     func(name string) ([]Archive, error)
@@ -163,25 +164,35 @@ type AdminBackend struct {
 	Remove func(name, steamID string) (string, error)
 }
 
+// ServiceOptions are the advanced paths of `service install` and
+// `service uninstall`. An empty value means the command's default.
+type ServiceOptions struct {
+	UnitDir   string
+	Binary    string
+	Systemctl string
+}
+
 // ServiceBackend manages the systemd units of an instance.
 type ServiceBackend struct {
 	Status    func(name string) (ServiceStatus, error)
-	Install   func(name string, enable bool) (string, error)
-	Uninstall func(name string) (string, error)
+	Install   func(name string, enable bool, opts ServiceOptions) (string, error)
+	Uninstall func(name string, opts ServiceOptions) (string, error)
 }
 
 // EnvBackend reports the environment and the supported games.
 type EnvBackend struct {
-	Doctor func() (Report, error)
-	Games  func() []GameChoice
+	Doctor  func() (Report, error)
+	Games   func() []GameChoice
+	Version func() string
 }
 
 // PanelBackend runs the HTTP panel while the lobby is open.
 type PanelBackend struct {
-	// Start listens on addr and returns the address it bound plus a stop
-	// function that shuts the listener down. Start is the only function that
-	// returns a cleanup, because the panel outlives the call.
-	Start func(ctx context.Context, addr string) (address string, stop func(), err error)
+	// Start listens on addr, starts the named instance when start is not
+	// empty, and returns the address it bound plus a stop function that shuts
+	// the listener down. Start is the only function that returns a cleanup,
+	// because the panel outlives the call.
+	Start func(ctx context.Context, addr, start string) (address string, stop func(), err error)
 }
 
 // validate reports every callable the lobby needs and does not have.
@@ -215,6 +226,7 @@ func (b Backend) validate() error {
 	need("Service.Uninstall", b.Service.Uninstall != nil)
 	need("Env.Doctor", b.Env.Doctor != nil)
 	need("Env.Games", b.Env.Games != nil)
+	need("Env.Version", b.Env.Version != nil)
 	need("Panel.Start", b.Panel.Start != nil)
 
 	if len(missing) > 0 {

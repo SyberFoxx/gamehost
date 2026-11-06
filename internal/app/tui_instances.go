@@ -46,7 +46,12 @@ func lobbyItem(s *store.Store, inst instance.Instance) (tui.Item, error) {
 	live := process.Alive(state.PID)
 	state = state.Resolve(live)
 
-	item := tui.Item{Name: inst.Name, Game: inst.Game, Phase: string(state.Phase)}
+	item := tui.Item{
+		Name:       inst.Name,
+		Game:       inst.Game,
+		Phase:      string(state.Phase),
+		BackupKeep: inst.Backup.Retention(),
+	}
 	if driver, err := games.Lookup(inst.Game); err == nil {
 		if driver.Label != "" {
 			item.Game = driver.Label

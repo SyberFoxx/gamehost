@@ -83,8 +83,9 @@ func lobbyBackend() tui.Backend {
 			Uninstall: lobbyServiceUninstall,
 		},
 		Env: tui.EnvBackend{
-			Doctor: lobbyDoctor,
-			Games:  lobbyGames,
+			Doctor:  lobbyDoctor,
+			Games:   lobbyGames,
+			Version: lobbyVersion,
 		},
 		Panel: tui.PanelBackend{
 			Start: servePanel,
