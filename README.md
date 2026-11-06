@@ -39,6 +39,7 @@ concurrency and tests with `-race`.
 | M10 | operators: `admin`, cross-site guard, `serve --start` | done |
 | M11 | `service install` / `service uninstall`: systemd user units | done |
 | M12 | interactive lobby: banner, arrow-key menu, log screen | done |
+| M13 | lobby as the whole program: instances, files, backups, admins, systemd, panel | done |
 
 ## Features
 
@@ -74,6 +75,9 @@ concurrency and tests with `-race`.
 - Opens an interactive lobby when you run `gamehost` with no arguments on a terminal: a large
   banner, the state of the selected world and a menu you drive with the arrow keys, for people who
   do not want to memorise commands.
+- Reaches every command from that lobby, without typing a flag: create and edit an instance,
+  install and update with live output, read and follow the log, list, create, restore and import
+  worlds, manage admins, write or remove the systemd units, run `doctor` and start the web panel.
 
 ## Requirements
 
@@ -171,14 +175,61 @@ dedicated game servers without memorising flags
 | `Esc` | return from the log screen |
 | `q` or `Ctrl+C` | leave |
 
+```text
+› Start  run it in the background
+  Stop   wait for a clean save
+  Logs   read and follow the newest log
+  Backup archive the world now
+INSTANCE
+  Details phase, pid, join code, paths
+  Settings world, players, network, backups
+  Files install or update the server files
+  Admins who can run admin commands
+  Backups list, restore or import a world
+  Systemd run it with systemd units
+SYSTEM
+  Environment check what the server needs
+  Web panel serve the browser panel
+  New instance create another world
+  Quit leave the lobby
+```
+
+| Key | Action |
+| --- | --- |
+| `↑` `↓` or `k` `j` | move the cursor |
+| `←` `→` or `h` `l` | switch instance, when there is more than one |
+| `Enter` | open the selected screen or run the action |
+| `n` | create an instance |
+| `r` | reload the state |
+| `?` | key map, with the command each action replaces |
+| `Esc` | return to the previous screen |
+| `q` or `Ctrl+C` | leave |
+
 Every entry calls the same code as the command it names, so the lobby and the terminal can never
 disagree about a phase or a grace period: `Start` uses the detached supervisor, `Stop` waits for the
 clean save, `Backup` refuses a running server, `Logs` reads the newest file. A long action shows a
 spinner and keeps the menu responsive; a failure is reported in the footer and the lobby stays
 usable.
 
+| Screen | What it does | Terminal equivalent |
+| --- | --- | --- |
+| New instance | wizard with the same validation; hides the fields the chosen game does not use | `create` |
+| Details | read-only view of the configuration and the state | `show`, `status` |
+| Settings | edits the values the launch flags read; refuses while the server runs | `config` |
+| Files | install or update, streaming the SteamCMD output; `Esc` cancels the download | `install`, `update` |
+| Logs | newest tail, then follows live; `G` returns to the live edge | `logs -f` |
+| Backups | `b` archives, `Enter` restores, `i` imports a `.world.gzip` | `backup`, `restore`, `import-world` |
+| Admins | `a` adds, `d` removes, both only while stopped | `admin add`, `admin remove` |
+| Systemd | `i` writes the units, `e` also enables them, `u` removes them | `service install`, `service uninstall` |
+| Environment | every `doctor` check with its status and a verdict | `doctor` |
+| Web panel | starts the panel on `127.0.0.1:8080` and stops it on `Esc` | `serve` |
+
+Destructive actions ask first: stop, update, restore, import, uninstall and remove-admin show a
+dialog naming the instance and what will happen. The web panel dies with the lobby.
+
 The lobby only opens when both stdin and stdout are terminals. `gamehost | head`, a redirect or a
-script still gets the usage text and exit code 2.
+script still gets the usage text and exit code 2, which is what the systemd units and the HTTP API
+rely on.
 
 ## Quick start
 
@@ -382,7 +433,7 @@ The test suite stops at the SteamCMD download. Once per machine, walk the whole 
 
 | Command | Purpose |
 | --- | --- |
-| `gamehost` | open the interactive lobby (terminal only) |
+| `gamehost` | open the interactive lobby: every command below is also a screen (terminal only) |
 | `gamehost doctor` | check platform, data directory, SteamCMD and display |
 | `gamehost create <name> [flags]` | create an instance and its directories |
 | `gamehost config <name> [flags]` | print or change the settings the launch flags express (stopped only) |

@@ -71,20 +71,20 @@ reachable inside the TUI, and the TUI must be the first thing a person sees. Bra
 
 | ID | Deliverable | Specs | Route | Status |
 | --- | --- | --- | --- | --- |
-| T1 | typed helpers in `internal/app` (create, config, admin, service, panel) extracted from the flag wrappers, no behaviour change | S14 | inline | pending |
-| T2 | `Backend` split into groups, `Event`, screen stack, navigation messages, help overlay, confirm dialog | S1, S12, S13 | inline | pending |
-| T3 | lobby menu with sections and scrolling, migrated to the stack | S1, S2 | inline | pending |
-| T4 | instance detail screen | S2 | inline | pending |
-| T5 | generic form screen plus the create wizard | S3 | inline | pending |
-| T6 | settings screen on the same form | S4 | inline | pending |
-| T7 | install/update progress screen over the streaming backend | S5 | inline | pending |
-| T8 | live log follow | S8 | inline | pending |
-| T9 | admins screen | S6 | inline | pending |
-| T10 | backups screen: list, create, restore, import | S7 | inline | pending |
-| T11 | doctor screen | S10 | inline | pending |
-| T12 | systemd screen | S9 | inline | pending |
-| T13 | web panel screen | S11 | inline | pending |
-| T14 | README, `docs/design.md`, `AGENTS.md` | S15 | inline | pending |
+| T1 | typed helpers in `internal/app` (create, config, admin, service, panel) extracted from the flag wrappers, no behaviour change | S14 | inline | done |
+| T2 | `Backend` split into groups, `Event`, screen stack, navigation messages, help overlay, confirm dialog | S1, S12, S13 | inline | done |
+| T3 | lobby menu with sections and scrolling, migrated to the stack | S1, S2 | inline | done |
+| T4 | instance detail screen | S2 | inline | done |
+| T5 | generic form screen plus the create wizard | S3 | inline | done |
+| T6 | settings screen on the same form | S4 | inline | done |
+| T7 | install/update progress screen over the streaming backend | S5 | inline | done |
+| T8 | live log follow | S8 | inline | done |
+| T9 | admins screen | S6 | inline | done |
+| T10 | backups screen: list, create, restore, import | S7 | inline | done |
+| T11 | doctor screen | S10 | inline | done |
+| T12 | systemd screen | S9 | inline | done |
+| T13 | web panel screen | S11 | inline | done |
+| T14 | README, `docs/design.md`, `AGENTS.md` | S15 | inline | done |
 
 Work units follow the task table. PR slices, in `feature-branch-chain` order:
 
@@ -112,3 +112,11 @@ Work units follow the task table. PR slices, in `feature-branch-chain` order:
 - **L5** — `charm.land/bubbles/v2@v2.2.1` uses the same `charm.land` module root as Bubble Tea v2 and
   exposes `textinput.Model` with `Update`/`View`/`Value`/`SetValue`. Verified in the module cache
   before adding it.
+- **L6** — Review before the docs: the form handled `left`/`right` for every field, so a text input
+  never saw its own horizontal arrows and a typo in the middle of a password could not be fixed.
+  The keys now reach the input unless the field is a choice; `TestFormKeepsArrowsInsideTextFields`
+  covers it.
+- **L7** — `gofmt -l .`, `go vet ./...` and `go test -race ./...` pass with the new test. The TTY
+  gate is unchanged, so the systemd units and `serve` keep the behaviour they had.
+- **L8** — The branch now carries the code, the tests and the documentation. Pushed to `origin`;
+  the repository stays under the owner's account with no additional collaborators.

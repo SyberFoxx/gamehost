@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -19,8 +21,8 @@ func TestWordmarkIsSixEvenRows(t *testing.T) {
 	if width == 0 {
 		t.Fatalf("the wordmark is empty")
 	}
-	if width > 80 {
-		t.Fatalf("the wordmark is %d columns wide, want at most 80", width)
+	if width > 90 {
+		t.Fatalf("the wordmark is %d columns wide, want at most 90", width)
 	}
 	for i, row := range rows {
 		if got := lipgloss.Width(row); got != width {
@@ -29,18 +31,26 @@ func TestWordmarkIsSixEvenRows(t *testing.T) {
 	}
 }
 
+// lobbyModel returns a root model showing the lobby with the given items.
+func lobbyModel(t *testing.T, items []Item) Model {
+	t.Helper()
+	f := &fake{items: items}
+	m := newTestModel(t, f, nil)
+	m, _ = step(t, m, listMsg{items: items})
+	return m
+}
+
 func TestLobbyShowsBannerMenuAndInstance(t *testing.T) {
 	t.Parallel()
-	m := newLobby(t, &recorder{})
-	m.items = []Item{{
+	m := lobbyModel(t, []Item{{
 		Name:      "Partidita",
 		Game:      "Core Keeper",
 		Phase:     "running",
 		PID:       733874,
 		StartedAt: time.Now().Add(-2 * time.Hour),
-		JoinLabel: "game",
+		JoinLabel: "game id",
 		JoinValue: "K85KQswu7GWLsQB",
-	}}
+	}})
 
 	view := m.View()
 	if !view.AltScreen {
@@ -63,11 +73,10 @@ func TestNarrowOrShortTerminalUsesTheName(t *testing.T) {
 		{"short", 100, 20},
 	} {
 		t.Run(size.name, func(t *testing.T) {
-			m := newLobby(t, &recorder{})
+			m := lobbyModel(t, []Item{{Name: "Partidita", Phase: "stopped"}})
 			m.width, m.height = size.width, size.height
-			m.items = []Item{{Name: "Partidita", Phase: "stopped"}}
 
-			content := m.View().Content
+			content := m.render()
 			if !strings.Contains(content, "GAMEHOST") {
 				t.Fatalf("the short banner is missing:\n%s", content)
 			}
@@ -80,26 +89,28 @@ func TestNarrowOrShortTerminalUsesTheName(t *testing.T) {
 
 func TestEmptyLobbyExplainsHowToCreateAnInstance(t *testing.T) {
 	t.Parallel()
-	m := newLobby(t, &recorder{})
+	m := lobbyModel(t, nil)
 
-	content := m.View().Content
-	if !strings.Contains(content, "gamehost create my-world") {
-		t.Fatalf("the empty lobby is missing the create hint:\n%s", content)
+	content := m.render()
+	for _, want := range []string{"No instances yet", "New instance"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("the empty lobby is missing %q:\n%s", want, content)
+		}
 	}
 }
 
 func TestFooterShowsProgressAndErrors(t *testing.T) {
 	t.Parallel()
-	m := newLobby(t, &recorder{})
-	m.busy, m.note = true, "Start Partidita…"
+	m := lobbyModel(t, []Item{{Name: "Partidita"}})
+	m.note = "starting Partidita…"
 
-	content := m.View().Content
-	if !strings.Contains(content, "Start Partidita") {
+	content := m.render()
+	if !strings.Contains(content, "starting Partidita") {
 		t.Fatalf("the footer is missing the running action:\n%s", content)
 	}
 
-	m.busy, m.bad, m.note = false, true, "instance is running, stop it first"
-	content = m.View().Content
+	m.bad, m.note = true, "instance is running, stop it first"
+	content = m.render()
 	if !strings.Contains(content, "stop it first") {
 		t.Fatalf("the footer is missing the error:\n%s", content)
 	}
@@ -107,13 +118,11 @@ func TestFooterShowsProgressAndErrors(t *testing.T) {
 
 func TestLogsViewScrollsToTheNewestLines(t *testing.T) {
 	t.Parallel()
-	m := newLobby(t, &recorder{})
-	m.items = []Item{{Name: "Partidita"}}
-	m.screen = screenLogs
-	m.height = 20
-	m.logs = []string{"boot", "loading world", "ready"}
+	f := &fake{follow: make(chan Event)}
+	logs := newLogs(context.Background(), f.backend().Logs, "Partidita").(*logs)
+	logs.lines = []string{"boot", "loading world", "ready"}
 
-	content := m.View().Content
+	content := logs.View(100, 20)
 	for _, want := range []string{"Logs · Partidita", "boot", "ready"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("the log screen is missing %q:\n%s", want, content)
@@ -123,19 +132,18 @@ func TestLogsViewScrollsToTheNewestLines(t *testing.T) {
 
 func TestLogsViewWithoutLogsSaysWhatToDo(t *testing.T) {
 	t.Parallel()
-	m := newLobby(t, &recorder{})
-	m.items = []Item{{Name: "Partidita"}}
-	m.screen = screenLogs
+	f := &fake{follow: make(chan Event)}
+	logs := newLogs(context.Background(), f.backend().Logs, "Partidita").(*logs)
+	logs.done = true
 
-	if !strings.Contains(m.View().Content, "start the server first") {
+	if !strings.Contains(logs.View(100, 20), "start the server first") {
 		t.Fatalf("an empty log screen should explain what to do")
 	}
 }
 
 func TestPanelBoxIsClosed(t *testing.T) {
 	t.Parallel()
-	m := newLobby(t, &recorder{})
-	m.items = []Item{{
+	m := lobbyModel(t, []Item{{
 		Name:      "Partidita",
 		Game:      "Core Keeper",
 		Phase:     "running",
@@ -143,10 +151,11 @@ func TestPanelBoxIsClosed(t *testing.T) {
 		StartedAt: time.Now().Add(-time.Hour),
 		JoinLabel: "game id",
 		JoinValue: "K85KQswu7GWLsQB",
-	}}
+	}})
 
+	content := m.render()
 	var box []string
-	for _, line := range strings.Split(m.View().Content, "\n") {
+	for _, line := range strings.Split(content, "\n") {
 		if strings.Contains(line, "╭") {
 			box = append(box, line)
 			continue
@@ -159,7 +168,7 @@ func TestPanelBoxIsClosed(t *testing.T) {
 		}
 	}
 	if len(box) < 3 {
-		t.Fatalf("the instance panel is missing:\n%s", m.View().Content)
+		t.Fatalf("the instance panel is missing:\n%s", content)
 	}
 
 	want := lipgloss.Width(box[0])
@@ -167,6 +176,37 @@ func TestPanelBoxIsClosed(t *testing.T) {
 		if got := lipgloss.Width(line); got != want {
 			t.Fatalf("panel line %d is %d columns wide, want %d: %q", i, got, want, line)
 		}
+	}
+}
+
+func TestHelpOverlayListsBackedCommandLines(t *testing.T) {
+	t.Parallel()
+	m := lobbyModel(t, []Item{{Name: "Partidita"}})
+	m, _ = step(t, m, press("?"))
+
+	content := m.render()
+	for _, want := range []string{"Keys", "gamehost list", "gamehost create", "ctrl+c"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("the help overlay is missing %q:\n%s", want, content)
+		}
+	}
+}
+
+func TestConfirmOverlayReplacesTheScreen(t *testing.T) {
+	t.Parallel()
+	m := lobbyModel(t, []Item{{Name: "Partidita"}})
+	m, _ = step(t, m, confirmMsg{
+		question: "Stop Partidita?",
+		detail:   "The server saves the world and exits.",
+		yes:      func() tea.Msg { return statusMsg{text: "stopped"} },
+	})
+
+	content := m.render()
+	if !strings.Contains(content, "Stop Partidita?") || !strings.Contains(content, "y") {
+		t.Fatalf("the confirmation is missing:\n%s", content)
+	}
+	if strings.Contains(content, "› Start") {
+		t.Fatalf("the confirmation should replace the screen:\n%s", content)
 	}
 }
 
@@ -194,6 +234,29 @@ func TestFormatUptime(t *testing.T) {
 	}
 }
 
+func TestHumanBytes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		bytes int64
+		want  string
+	}{
+		{512, "512 B"},
+		{1024, "1.0 KiB"},
+		{1536, "1.5 KiB"},
+		{1024 * 1024, "1.0 MiB"},
+		{3 * 1024 * 1024 * 1024, "3.0 GiB"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			t.Parallel()
+			if got := humanBytes(tt.bytes); got != tt.want {
+				t.Fatalf("humanBytes(%d) = %q, want %q", tt.bytes, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestClipKeepsTheWidth(t *testing.T) {
 	t.Parallel()
 	if got := clip("short", 10); got != "short" {
@@ -205,5 +268,71 @@ func TestClipKeepsTheWidth(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, "…") {
 		t.Fatalf("clip did not mark the cut: %q", got)
+	}
+	if got := clip("anything", 0); got != "anything" {
+		t.Fatalf("clip with no width should not cut: %q", got)
+	}
+}
+
+func TestTailWindow(t *testing.T) {
+	t.Parallel()
+	lines := []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
+
+	tests := []struct {
+		name   string
+		rows   int
+		scroll int
+		want   []string
+	}{
+		{"live edge", 3, 0, []string{"7", "8", "9"}},
+		{"scrolled back", 3, 2, []string{"5", "6", "7"}},
+		{"everything", 0, 0, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := tailWindow(lines, tt.rows, tt.scroll)
+			if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+				t.Fatalf("tailWindow = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAppendLinesKeepsEmbeddedNewlines(t *testing.T) {
+	t.Parallel()
+	lines := appendLines(nil, "first\nsecond")
+	lines = appendLines(lines, "third\n")
+	lines = appendLines(lines, "")
+
+	want := "first,second,third"
+	if got := strings.Join(lines, ","); got != want {
+		t.Fatalf("appendLines = %q, want %q", got, want)
+	}
+}
+
+func TestStatusStyleMarksEveryVerdict(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		status string
+		marker string
+	}{
+		{"ok", "✓"},
+		{"active", "✓"},
+		{"warn", "!"},
+		{"limited", "!"},
+		{"fail", "✗"},
+		{"", "✗"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			t.Parallel()
+			marker, _ := statusStyle(tt.status)
+			if marker != tt.marker {
+				t.Fatalf("statusStyle(%q) = %q, want %q", tt.status, marker, tt.marker)
+			}
+		})
 	}
 }

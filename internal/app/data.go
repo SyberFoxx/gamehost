@@ -127,13 +127,19 @@ func runImportWorld(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	return importWorld(s, inst, fs.Arg(1), stdout)
+}
+
+// importWorld copies one world save into the instance's slot and archives the
+// current data first. The lobby reuses it after its confirmation.
+func importWorld(s *store.Store, inst instance.Instance, path string, stdout io.Writer) error {
 	release, err := requireStopped(s, inst, "import-world")
 	if err != nil {
 		return err
 	}
 	defer release()
 
-	source, err := openWorld(fs.Arg(1))
+	source, err := openWorld(path)
 	if err != nil {
 		return err
 	}
@@ -159,7 +165,7 @@ func runImportWorld(args []string, stdout, stderr io.Writer) error {
 	}
 
 	fmt.Fprintf(stdout, "imported %s into %s (slot %d)\n  world: %s\nnext: gamehost start %s --detach\n",
-		fs.Arg(1), inst.Name, inst.World.Index, target, inst.Name)
+		path, inst.Name, inst.World.Index, target, inst.Name)
 	return nil
 }
 

@@ -5,42 +5,39 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
 
-// recorder is a Backend that remembers what the lobby asked of it.
-type recorder struct {
-	items   []Item
-	listErr error
-	logs    []string
-	logErr  error
-
-	called string
-	name   string
-	text   string
-	runErr error
-}
-
-func (r *recorder) backend() Backend {
-	return Backend{
-		List:   func() ([]Item, error) { return r.items, r.listErr },
-		Start:  func(_ context.Context, name string) (string, error) { return r.record("start", name) },
-		Stop:   func(_ context.Context, name string) (string, error) { return r.record("stop", name) },
-		Backup: func(_ context.Context, name string) (string, error) { return r.record("backup", name) },
-		Logs: func(name string, _ int) ([]string, error) {
-			r.called, r.name = "logs", name
-			return r.logs, r.logErr
-		},
+// press builds a key message for the shortcuts the lobby uses.
+func press(text string) tea.KeyPressMsg {
+	switch text {
+	case "up":
+		return tea.KeyPressMsg{Code: tea.KeyUp}
+	case "down":
+		return tea.KeyPressMsg{Code: tea.KeyDown}
+	case "left":
+		return tea.KeyPressMsg{Code: tea.KeyLeft}
+	case "right":
+		return tea.KeyPressMsg{Code: tea.KeyRight}
+	case "enter":
+		return tea.KeyPressMsg{Code: tea.KeyEnter}
+	case "esc":
+		return tea.KeyPressMsg{Code: tea.KeyEscape}
+	case "tab":
+		return tea.KeyPressMsg{Code: tea.KeyTab}
+	case "delete":
+		return tea.KeyPressMsg{Code: tea.KeyDelete}
+	case " ":
+		return tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
+	default:
+		r := []rune(text)[0]
+		return tea.KeyPressMsg{Code: r, Text: text}
 	}
 }
 
-func (r *recorder) record(action, name string) (string, error) {
-	r.called, r.name = action, name
-	return r.text, r.runErr
-}
-
-// step applies one message and returns the model plus the command it asked for.
+// step applies one message and returns the model plus its command.
 func step(t *testing.T, m Model, msg tea.Msg) (Model, tea.Cmd) {
 	t.Helper()
 	next, cmd := m.Update(msg)
@@ -68,8 +65,8 @@ func drain(t *testing.T, cmd tea.Cmd) []tea.Msg {
 	return []tea.Msg{msg}
 }
 
-// message returns the first message of the requested type.
-func message[T tea.Msg](t *testing.T, msgs []tea.Msg) T {
+// find returns the first message of the requested type.
+func find[T tea.Msg](t *testing.T, msgs []tea.Msg) T {
 	t.Helper()
 	for _, msg := range msgs {
 		if found, ok := msg.(T); ok {
@@ -77,220 +74,186 @@ func message[T tea.Msg](t *testing.T, msgs []tea.Msg) T {
 		}
 	}
 	var zero T
-	t.Fatalf("no %T in %v", zero, msgs)
+	t.Fatalf("no %T in %#v", zero, msgs)
 	return zero
 }
 
-func newLobby(t *testing.T, r *recorder) Model {
+// fake is a Backend that records what the lobby asked of it.
+type fake struct {
+	items    []Item
+	detail   Detail
+	settings Settings
+	archives []Archive
+	admins   []Admin
+	report   Report
+	service  ServiceStatus
+	games    []GameChoice
+
+	follow <-chan Event
+
+	panelAddr string
+	panelStop func()
+
+	calls  []string
+	err    error
+	onStop func()
+}
+
+func (f *fake) record(call string) {
+	f.calls = append(f.calls, call)
+}
+
+func (f *fake) backend() Backend {
+	return Backend{
+		Instances: InstanceBackend{
+			List: func() ([]Item, error) {
+				f.record("list")
+				return f.items, f.err
+			},
+			Show: func(name string) (Detail, error) {
+				f.record("show " + name)
+				return f.detail, f.err
+			},
+			Create: func(settings Settings) (Detail, error) {
+				f.record("create " + settings.Name)
+				detail := f.detail
+				if detail.Name == "" {
+					detail.Name = settings.Name
+				}
+				return detail, f.err
+			},
+			Config: func(name string) (Settings, error) {
+				f.record("config " + name)
+				return f.settings, f.err
+			},
+			Update: func(name string, _ Settings) (Detail, error) {
+				f.record("update " + name)
+				detail := f.detail
+				if detail.Name == "" {
+					detail.Name = name
+				}
+				return detail, f.err
+			},
+		},
+		Server: ServerBackend{
+			Start: func(_ context.Context, name string) (string, error) {
+				f.record("start " + name)
+				return "started " + name, f.err
+			},
+			Stop: func(_ context.Context, name string) (string, error) {
+				f.record("stop " + name)
+				return "stopped " + name, f.err
+			},
+			Backup: func(_ context.Context, name string) (string, error) {
+				f.record("backup " + name)
+				return "backed up " + name, f.err
+			},
+			Restore: func(_ context.Context, name, archive string) (string, error) {
+				f.record("restore " + name + " " + archive)
+				return "restored " + name, f.err
+			},
+			ImportWorld: func(_ context.Context, name, path string) (string, error) {
+				f.record("import " + name + " " + path)
+				return "imported " + name, f.err
+			},
+			Backups: func(name string) ([]Archive, error) {
+				f.record("backups " + name)
+				return f.archives, f.err
+			},
+		},
+		Logs: LogBackend{
+			Follow: func(_ context.Context, name string, _ int) <-chan Event {
+				f.record("follow " + name)
+				return f.follow
+			},
+		},
+		Files: FileBackend{
+			Install: func(_ context.Context, name string) <-chan Event {
+				f.record("install " + name)
+				return closedStream(Event{Line: "downloading", Done: true})
+			},
+			Update: func(_ context.Context, name string) <-chan Event {
+				f.record("update " + name)
+				return closedStream(Event{Line: "updating", Done: true})
+			},
+		},
+		Admins: AdminBackend{
+			List: func(name string) ([]Admin, error) {
+				f.record("admins " + name)
+				return f.admins, f.err
+			},
+			Add: func(name, steamID, _ string, limited bool) (string, error) {
+				f.record("admin add " + name + " " + steamID)
+				if limited {
+					return "limited", nil
+				}
+				return "added", nil
+			},
+			Remove: func(name, steamID string) (string, error) {
+				f.record("admin remove " + name + " " + steamID)
+				return "removed", f.err
+			},
+		},
+		Service: ServiceBackend{
+			Status: func(name string) (ServiceStatus, error) {
+				f.record("service status " + name)
+				return f.service, f.err
+			},
+			Install: func(name string, _ bool) (string, error) {
+				f.record("service install " + name)
+				return "installed", f.err
+			},
+			Uninstall: func(name string) (string, error) {
+				f.record("service uninstall " + name)
+				return "uninstalled", f.err
+			},
+		},
+		Env: EnvBackend{
+			Doctor: func() (Report, error) {
+				f.record("doctor")
+				return f.report, f.err
+			},
+			Games: func() []GameChoice { return f.games },
+		},
+		Panel: PanelBackend{
+			Start: func(_ context.Context, _ string) (string, func(), error) {
+				f.record("panel")
+				return f.panelAddr, f.panelStop, f.err
+			},
+		},
+	}
+}
+
+// closedStream returns a channel that already holds events and is closed.
+func closedStream(events ...Event) <-chan Event {
+	ch := make(chan Event, len(events))
+	for _, event := range events {
+		ch <- event
+	}
+	close(ch)
+	return ch
+}
+
+// newTestModel returns a root model showing one screen at a fixed size.
+func newTestModel(t *testing.T, f *fake, top screen) Model {
 	t.Helper()
-	m := newModel(context.Background(), r.backend())
+	m := newModel(context.Background(), f.backend())
+	if top != nil {
+		m.stack = []screen{top}
+	}
 	m.width, m.height = 100, 40
 	return m
 }
 
-func TestInitLoadsInstances(t *testing.T) {
-	t.Parallel()
-	r := &recorder{items: []Item{{Name: "Partidita"}, {Name: "Otro"}}}
-	m := newLobby(t, r)
-
-	msgs := drain(t, m.Init())
-	loaded := message[listMsg](t, msgs)
-	if loaded.err != nil {
-		t.Fatalf("list: %v", loaded.err)
+func menuIndex(t *testing.T, want action) int {
+	t.Helper()
+	for i, line := range menuLines {
+		if !line.header && line.action == want {
+			return i
+		}
 	}
-
-	m, _ = step(t, m, loaded)
-	if len(m.items) != 2 {
-		t.Fatalf("got %d items, want 2", len(m.items))
-	}
-}
-
-func TestMenuCursorMovesAndClamps(t *testing.T) {
-	t.Parallel()
-	m := newLobby(t, &recorder{})
-
-	steps := []struct {
-		name string
-		key  tea.KeyPressMsg
-		want int
-	}{
-		{"down", tea.KeyPressMsg{Code: tea.KeyDown}, 1},
-		{"down again", tea.KeyPressMsg{Code: tea.KeyDown}, 2},
-		{"up", tea.KeyPressMsg{Code: tea.KeyUp}, 1},
-		{"letter j", tea.KeyPressMsg{Code: 'j', Text: "j"}, 2},
-	}
-	for _, tc := range steps {
-		t.Run(tc.name, func(t *testing.T) {
-			var cmd tea.Cmd
-			m, cmd = step(t, m, tc.key)
-			if cmd != nil {
-				t.Fatalf("moving the cursor returned a command")
-			}
-			if m.cursor != tc.want {
-				t.Fatalf("cursor = %d, want %d", m.cursor, tc.want)
-			}
-		})
-	}
-
-	// The list never wraps: the top and bottom clamp.
-	for range menu {
-		m, _ = step(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
-	}
-	if m.cursor != len(menu)-1 {
-		t.Fatalf("cursor = %d, want %d", m.cursor, len(menu)-1)
-	}
-	for range menu {
-		m, _ = step(t, m, tea.KeyPressMsg{Code: tea.KeyUp})
-	}
-	if m.cursor != 0 {
-		t.Fatalf("cursor = %d, want 0", m.cursor)
-	}
-}
-
-func TestQuitKeysLeaveTheProgram(t *testing.T) {
-	t.Parallel()
-	for _, key := range []string{"q", "ctrl+c"} {
-		t.Run(key, func(t *testing.T) {
-			m := newLobby(t, &recorder{})
-			_, cmd := m.key(key)
-			if _, ok := drain(t, cmd)[0].(tea.QuitMsg); !ok {
-				t.Fatalf("%s did not ask to quit", key)
-			}
-		})
-	}
-}
-
-func TestActivateWithoutInstancesExplainsWhatToDo(t *testing.T) {
-	t.Parallel()
-	m := newLobby(t, &recorder{})
-
-	m, cmd := step(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if cmd != nil {
-		t.Fatalf("activating an empty lobby returned a command")
-	}
-	if !strings.Contains(m.note, "gamehost create") {
-		t.Fatalf("note = %q, want a create hint", m.note)
-	}
-	if !m.bad {
-		t.Fatalf("an empty lobby should report the problem as an error")
-	}
-}
-
-func TestStartRunsTheActionAwayFromTheUI(t *testing.T) {
-	t.Parallel()
-	r := &recorder{items: []Item{{Name: "Partidita"}}, text: "Partidita is running (pid 42)"}
-	m := newLobby(t, r)
-	m, _ = step(t, m, listMsg{items: r.items})
-
-	m, cmd := step(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !m.busy {
-		t.Fatalf("the lobby should be busy while the action runs")
-	}
-	if m.cursor != 0 {
-		t.Fatalf("cursor = %d, want the Start entry", m.cursor)
-	}
-
-	result := message[resultMsg](t, drain(t, cmd))
-	if result.err != nil {
-		t.Fatalf("start: %v", result.err)
-	}
-	if r.called != "start" || r.name != "Partidita" {
-		t.Fatalf("backend called %q on %q, want start on Partidita", r.called, r.name)
-	}
-
-	m, cmd = step(t, m, result)
-	if m.busy {
-		t.Fatalf("the lobby should be idle again")
-	}
-	if !strings.Contains(m.note, "running") {
-		t.Fatalf("note = %q, want the result text", m.note)
-	}
-	if cmd == nil {
-		t.Fatalf("a finished action should refresh the instance list")
-	}
-}
-
-func TestBusyRefusesASecondAction(t *testing.T) {
-	t.Parallel()
-	r := &recorder{items: []Item{{Name: "Partidita"}}}
-	m := newLobby(t, r)
-	m, _ = step(t, m, listMsg{items: r.items})
-	m, cmd := step(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	drain(t, cmd) // the first start reaches the backend and records the call
-
-	m, cmd = step(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
-	m, cmd = step(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if cmd != nil {
-		t.Fatalf("a second action ran while the first was in flight")
-	}
-	if r.called != "start" {
-		t.Fatalf("backend called %q, want the first start", r.called)
-	}
-}
-
-func TestFailureKeepsTheLobbyUsable(t *testing.T) {
-	t.Parallel()
-	r := &recorder{items: []Item{{Name: "Partidita"}}, runErr: errors.New("instance is running, stop it first")}
-	m := newLobby(t, r)
-	m, _ = step(t, m, listMsg{items: r.items})
-	m, _ = step(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
-	m, cmd := step(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-
-	m, _ = step(t, m, message[resultMsg](t, drain(t, cmd)))
-	if !m.bad {
-		t.Fatalf("a failed action should be reported as an error")
-	}
-	if !strings.Contains(m.note, "stop it first") {
-		t.Fatalf("note = %q, want the backend error", m.note)
-	}
-	if m.screen != screenLobby || len(m.items) != 1 {
-		t.Fatalf("a failed action must not lose the lobby state")
-	}
-}
-
-func TestLogsScreenReadsAndReturns(t *testing.T) {
-	t.Parallel()
-	r := &recorder{
-		items: []Item{{Name: "Partidita"}},
-		logs:  []string{"line one", "line two"},
-	}
-	m := newLobby(t, r)
-	m, _ = step(t, m, listMsg{items: r.items})
-	m.cursor = 2 // Logs
-
-	m, cmd := step(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.screen != screenLogs {
-		t.Fatalf("screen = %d, want the log screen", m.screen)
-	}
-
-	m, _ = step(t, m, message[logsMsg](t, drain(t, cmd)))
-	if r.called != "logs" || r.name != "Partidita" {
-		t.Fatalf("backend called %q on %q, want logs on Partidita", r.called, r.name)
-	}
-	if len(m.logs) != 2 || m.busy {
-		t.Fatalf("logs = %d lines, busy = %v", len(m.logs), m.busy)
-	}
-
-	m, _ = step(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
-	if m.screen != screenLobby {
-		t.Fatalf("esc did not return to the lobby")
-	}
-}
-
-func TestLogScrollStaysInsideTheBuffer(t *testing.T) {
-	t.Parallel()
-	m := newLobby(t, &recorder{})
-	m.height = 20
-	m.logs = make([]string, 50)
-
-	m = m.scrollLogs(-10)
-	if m.scroll != 0 {
-		t.Fatalf("scroll = %d, want 0", m.scroll)
-	}
-	m = m.scrollLogs(1000)
-	if want := len(m.logs) - m.logRows(); m.scroll != want {
-		t.Fatalf("scroll = %d, want %d", m.scroll, want)
-	}
+	t.Fatalf("menu has no entry for action %d", want)
+	return 0
 }
 
 func TestBackendValidation(t *testing.T) {
@@ -298,8 +261,485 @@ func TestBackendValidation(t *testing.T) {
 	if err := (Backend{}).validate(); err == nil {
 		t.Fatalf("an empty backend should be refused")
 	}
-	full := (&recorder{}).backend()
-	if err := full.validate(); err != nil {
+	if err := (&fake{}).backend().validate(); err != nil {
 		t.Fatalf("a complete backend should pass: %v", err)
+	}
+}
+
+func TestLobbyLoadsInstances(t *testing.T) {
+	t.Parallel()
+	f := &fake{items: []Item{{Name: "Partidita"}, {Name: "Otro"}}}
+	m := newTestModel(t, f, nil)
+
+	msgs := drain(t, m.Init())
+	loaded := find[listMsg](t, msgs)
+	if loaded.err != nil {
+		t.Fatalf("list: %v", loaded.err)
+	}
+
+	m, _ = step(t, m, loaded)
+	lobby := m.stack[0].(*lobby)
+	if len(lobby.items) != 2 {
+		t.Fatalf("got %d items, want 2", len(lobby.items))
+	}
+}
+
+func TestMenuCursorSkipsHeaders(t *testing.T) {
+	t.Parallel()
+	m := newTestModel(t, &fake{}, nil)
+	lobby := m.stack[0].(*lobby)
+
+	for range menuLines {
+		m, _ = step(t, m, press("down"))
+		if menuLines[lobby.cursor].header {
+			t.Fatalf("cursor landed on the header %q", menuLines[lobby.cursor].label)
+		}
+	}
+	if lobby.cursor != menuIndex(t, actQuit) {
+		t.Fatalf("cursor = %d, want the last entry", lobby.cursor)
+	}
+
+	for range menuLines {
+		m, _ = step(t, m, press("up"))
+	}
+	if lobby.cursor != menuIndex(t, actStart) {
+		t.Fatalf("cursor = %d, want the first entry", lobby.cursor)
+	}
+}
+
+func TestStopAsksBeforeRunning(t *testing.T) {
+	t.Parallel()
+	f := &fake{items: []Item{{Name: "Partidita"}}}
+	m := newTestModel(t, f, nil)
+	m, _ = step(t, m, listMsg{items: f.items})
+	m.stack[0].(*lobby).cursor = menuIndex(t, actStop)
+
+	m, cmd := step(t, m, press("enter"))
+	question := find[confirmMsg](t, drain(t, cmd))
+	if !strings.Contains(question.question, "Stop Partidita") {
+		t.Fatalf("question = %q", question.question)
+	}
+	if strings.Contains(question.detail, "steam") {
+		t.Fatalf("detail = %q", question.detail)
+	}
+
+	m, _ = step(t, m, question)
+	if m.confirm == nil {
+		t.Fatalf("the confirmation was not opened")
+	}
+	if m.stack[0].(*lobby).busy {
+		t.Fatalf("the lobby should not be busy before the answer")
+	}
+
+	_, cmd = step(t, m, press("y"))
+	run := find[runActionMsg](t, drain(t, cmd))
+	if run.kind != actStop || run.name != "Partidita" {
+		t.Fatalf("runActionMsg = %#v", run)
+	}
+}
+
+func TestCreateFormHidesFieldsPerGame(t *testing.T) {
+	t.Parallel()
+	f := &fake{games: []GameChoice{
+		{Name: gameCoreKeeper, Label: "Core Keeper"},
+		{Name: gameProjectZomboid, Label: "Project Zomboid"},
+	}}
+	form := newCreateForm(context.Background(), f.backend()).(*form)
+
+	visible := func() map[string]bool {
+		values := form.values()
+		out := make(map[string]bool, len(form.fields))
+		for _, field := range form.fields {
+			out[field.key] = field.visible(values)
+		}
+		return out
+	}
+
+	if !visible()["seed"] || visible()["udp"] {
+		t.Fatalf("Core Keeper fields are wrong: %v", visible())
+	}
+
+	// Move to the game choice and switch to Project Zomboid.
+	form.cursor = indexOf(t, form.fields, "game")
+	form.adjust(1)
+
+	if visible()["seed"] || !visible()["udp"] || !visible()["admin-password"] {
+		t.Fatalf("Project Zomboid fields are wrong: %v", visible())
+	}
+	if form.values()["game"] != gameProjectZomboid {
+		t.Fatalf("game value = %q", form.values()["game"])
+	}
+}
+
+// covers the horizontal arrows inside a text field: they move the input
+// cursor instead of being eaten by the choice handling
+func TestFormKeepsArrowsInsideTextFields(t *testing.T) {
+	t.Parallel()
+	f := &fake{games: []GameChoice{{Name: gameCoreKeeper, Label: "Core Keeper"}}}
+	form := newCreateForm(context.Background(), f.backend()).(*form)
+
+	name := indexOf(t, form.fields, "name")
+	form.Init()
+	form.fields[name].input.SetValue("abc")
+
+	form.Update(press("left"))
+	if form.cursor != name {
+		t.Fatalf("left moved the form cursor to %d, want it to stay on the field", form.cursor)
+	}
+	if got := form.fields[name].input.Position(); got != 2 {
+		t.Fatalf("input position = %d, want 2 after one left arrow", got)
+	}
+}
+
+// indexOf returns the field index of a key.
+func indexOf(t *testing.T, fields []formField, key string) int {
+	t.Helper()
+	for i, field := range fields {
+		if field.key == key {
+			return i
+		}
+	}
+	t.Fatalf("no field %q", key)
+	return 0
+}
+
+func TestCreateFormSubmitReturnsTheCreatedName(t *testing.T) {
+	t.Parallel()
+	f := &fake{games: []GameChoice{{Name: gameCoreKeeper, Label: "Core Keeper"}}}
+	form := newCreateForm(context.Background(), f.backend()).(*form)
+	form.fields[indexOf(t, form.fields, "name")].input.SetValue("partidita")
+
+	msgs := drain(t, form.apply())
+	done := find[formDoneMsg](t, msgs)
+	if done.err != nil {
+		t.Fatalf("create: %v", done.err)
+	}
+	if done.note != "created partidita" {
+		t.Fatalf("note = %q", done.note)
+	}
+	if len(f.calls) != 1 || f.calls[0] != "create partidita" {
+		t.Fatalf("calls = %v", f.calls)
+	}
+}
+
+func TestFormRefusesAFailedSubmitWithoutLeaving(t *testing.T) {
+	t.Parallel()
+	f := &fake{games: []GameChoice{{Name: gameCoreKeeper, Label: "Core Keeper"}}, err: errors.New("name is taken")}
+	form := newCreateForm(context.Background(), f.backend()).(*form)
+	form.fields[indexOf(t, form.fields, "name")].input.SetValue("partidita")
+
+	msgs := drain(t, form.apply())
+	done := find[formDoneMsg](t, msgs)
+	if done.err == nil {
+		t.Fatalf("a failed create should report an error")
+	}
+
+	_, cmd := form.Update(done)
+	if cmd != nil {
+		t.Fatalf("a failed submit must not leave the form")
+	}
+	if !strings.Contains(form.err, "name is taken") {
+		t.Fatalf("form error = %q", form.err)
+	}
+	if form.busy {
+		t.Fatalf("the form should be editable again")
+	}
+}
+
+func TestQuestionMarkDoesNotOpenHelpWhileTyping(t *testing.T) {
+	t.Parallel()
+	f := &fake{games: []GameChoice{{Name: gameCoreKeeper, Label: "Core Keeper"}}}
+	m := newTestModel(t, f, newCreateForm(context.Background(), f.backend()))
+
+	m, _ = step(t, m, press("?"))
+	if m.help {
+		t.Fatalf("? opened the help overlay inside a text field")
+	}
+}
+
+func TestQuestionMarkOpensHelpOutsideAForm(t *testing.T) {
+	t.Parallel()
+	m := newTestModel(t, &fake{}, nil)
+
+	m, _ = step(t, m, press("?"))
+	if !m.help {
+		t.Fatalf("? did not open the help overlay")
+	}
+	if !strings.Contains(m.render(), "Keys") {
+		t.Fatalf("the help overlay is empty")
+	}
+}
+
+func TestMenuEntryPushesTheExpectedScreen(t *testing.T) {
+	t.Parallel()
+	f := &fake{items: []Item{{Name: "Partidita"}}}
+	m := newTestModel(t, f, nil)
+	m, _ = step(t, m, listMsg{items: f.items})
+
+	tests := []struct {
+		action action
+		check  func(t *testing.T, s screen)
+	}{
+		{actDetails, func(t *testing.T, s screen) {
+			_, ok := s.(*detail)
+			if !ok {
+				t.Fatalf("got %T", s)
+			}
+		}},
+		{actLogs, func(t *testing.T, s screen) {
+			_, ok := s.(*logs)
+			if !ok {
+				t.Fatalf("got %T", s)
+			}
+		}},
+		{actAdmins, func(t *testing.T, s screen) {
+			_, ok := s.(*admins)
+			if !ok {
+				t.Fatalf("got %T", s)
+			}
+		}},
+		{actBackups, func(t *testing.T, s screen) {
+			_, ok := s.(*backups)
+			if !ok {
+				t.Fatalf("got %T", s)
+			}
+		}},
+		{actService, func(t *testing.T, s screen) {
+			_, ok := s.(*service)
+			if !ok {
+				t.Fatalf("got %T", s)
+			}
+		}},
+		{actDoctor, func(t *testing.T, s screen) {
+			_, ok := s.(*doctor)
+			if !ok {
+				t.Fatalf("got %T", s)
+			}
+		}},
+		{actPanel, func(t *testing.T, s screen) {
+			_, ok := s.(*panel)
+			if !ok {
+				t.Fatalf("got %T", s)
+			}
+		}},
+		{actFiles, func(t *testing.T, s screen) {
+			_, ok := s.(*files)
+			if !ok {
+				t.Fatalf("got %T", s)
+			}
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(menuLines[menuIndex(t, tt.action)].label, func(t *testing.T) {
+			m := newTestModel(t, f, nil)
+			m, _ = step(t, m, listMsg{items: f.items})
+			m.stack[0].(*lobby).cursor = menuIndex(t, tt.action)
+
+			m, cmd := step(t, m, press("enter"))
+			push, ok := settle(t, &m, cmd).(pushMsg)
+			if !ok {
+				t.Fatalf("no screen was pushed")
+			}
+			m, _ = step(t, m, push)
+			if len(m.stack) != 2 {
+				t.Fatalf("stack has %d screens, want 2", len(m.stack))
+			}
+			tt.check(t, m.stack[len(m.stack)-1])
+		})
+	}
+}
+
+// settle runs commands until one of them asks for a new screen, feeding the
+// messages a screen needs in between.
+func settle(t *testing.T, m *Model, cmd tea.Cmd) tea.Msg {
+	t.Helper()
+	for i := 0; i < 4 && cmd != nil; i++ {
+		next := cmd
+		cmd = nil
+		for _, msg := range drain(t, next) {
+			if push, ok := msg.(pushMsg); ok {
+				return push
+			}
+			*m, cmd = step(t, *m, msg)
+		}
+	}
+	t.Fatalf("no pushMsg after settling")
+	return nil
+}
+
+func TestLogsAppendAndFollow(t *testing.T) {
+	t.Parallel()
+	ch := make(chan Event, 4)
+	f := &fake{follow: ch}
+	logs := newLogs(context.Background(), f.backend().Logs, "Partidita").(*logs)
+
+	cmd := logs.Init()
+	ch <- Event{Line: "boot"}
+	ch <- Event{Line: "ready"}
+
+	logs, cmd = applyTo(t, logs, cmd)
+	logs, cmd = applyTo(t, logs, cmd)
+	if len(logs.lines) != 2 || logs.lines[0] != "boot" {
+		t.Fatalf("lines = %q", logs.lines)
+	}
+
+	ch <- Event{Done: true}
+	logs, _ = applyTo(t, logs, cmd)
+	if !logs.done {
+		t.Fatalf("the log did not finish")
+	}
+	if !logs.follow {
+		t.Fatalf("following should stay on until the user scrolls")
+	}
+}
+
+// applyTo runs one command and feeds its message back into a screen of the
+// same concrete type.
+func applyTo[S screen](t *testing.T, s S, cmd tea.Cmd) (S, tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		t.Fatalf("no command to apply")
+	}
+	next, nextCmd := s.Update(cmd())
+	typed, ok := next.(S)
+	if !ok {
+		t.Fatalf("Update returned %T, want %T", next, s)
+	}
+	return typed, nextCmd
+}
+
+func TestLogsEscCancelsTheFollower(t *testing.T) {
+	t.Parallel()
+	ch := make(chan Event, 1)
+	f := &fake{follow: ch}
+	logs := newLogs(context.Background(), f.backend().Logs, "Partidita").(*logs)
+	logs.Init()
+
+	if logs.cancel == nil {
+		t.Fatalf("the follower has no cancel function")
+	}
+	_, cmd := logs.Update(press("esc"))
+	if logs.cancel != nil {
+		t.Fatalf("esc left the follower running")
+	}
+	if _, ok := drain(t, cmd)[0].(popMsg); !ok {
+		t.Fatalf("esc did not leave the screen")
+	}
+}
+
+func TestBackupsRestoreAsksAndNamesTheArchive(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		archives: []Archive{{Name: "2026-11-05_10-00-00.tar.gz", Bytes: 1024, Modified: time.Now()}},
+	}
+	backups := newBackups(context.Background(), f.backend().Server, Item{Name: "Partidita"}).(*backups)
+	backups.list = f.archives
+
+	_, cmd := backups.Update(press("enter"))
+	question := find[confirmMsg](t, drain(t, cmd))
+	if !strings.Contains(question.question, "Restore Partidita") {
+		t.Fatalf("question = %q", question.question)
+	}
+	if !strings.Contains(question.detail, f.archives[0].Name) {
+		t.Fatalf("detail = %q", question.detail)
+	}
+}
+
+func TestBackupsImportRequiresAPath(t *testing.T) {
+	t.Parallel()
+	f := &fake{}
+	backups := newBackups(context.Background(), f.backend().Server, Item{Name: "Partidita"}).(*backups)
+
+	_, cmd := backups.Update(press("i"))
+	if cmd == nil {
+		t.Fatalf("i did not focus the path input")
+	}
+	_, cmd = backups.Update(press("enter"))
+	if cmd != nil {
+		t.Fatalf("an empty path should not ask to import")
+	}
+	if !strings.Contains(backups.err, "path is required") {
+		t.Fatalf("err = %q", backups.err)
+	}
+}
+
+func TestCancellingAConfirmationDoesNotWedgeTheScreen(t *testing.T) {
+	t.Parallel()
+	f := &fake{archives: []Archive{{Name: "2026-11-05_10-00-00.tar.gz", Modified: time.Now()}}}
+	backups := newBackups(context.Background(), f.backend().Server, Item{Name: "Partidita"}).(*backups)
+	backups.list = f.archives
+	m := newTestModel(t, f, backups)
+
+	m, cmd := step(t, m, press("enter"))
+	m, _ = step(t, m, find[confirmMsg](t, drain(t, cmd)))
+	if m.confirm == nil {
+		t.Fatalf("restore did not ask for confirmation")
+	}
+
+	m, _ = step(t, m, press("n"))
+	if m.confirm != nil {
+		t.Fatalf("the confirmation did not close")
+	}
+	if backups.busy {
+		t.Fatalf("cancelling left the screen busy")
+	}
+}
+
+func TestWindowSizeReachesAPushedScreen(t *testing.T) {
+	t.Parallel()
+	f := &fake{follow: make(chan Event)}
+	logs := newLogs(context.Background(), f.backend().Logs, "Partidita").(*logs)
+	m := newTestModel(t, f, logs)
+
+	m, _ = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	if logs.width != 120 || logs.height != 30 {
+		t.Fatalf("log screen size = %dx%d, want 120x30", logs.width, logs.height)
+	}
+}
+
+func TestPanelStartsAndStops(t *testing.T) {
+	t.Parallel()
+	stopped := false
+	f := &fake{
+		panelAddr: "127.0.0.1:8080",
+		panelStop: func() { stopped = true },
+	}
+	p := newPanel(context.Background(), f.backend().Panel).(*panel)
+
+	cmd := p.start()
+	p, _ = applyTo(t, p, cmd)
+	if p.stop == nil || p.address != "127.0.0.1:8080" {
+		t.Fatalf("panel = %q, stop nil = %v", p.address, p.stop == nil)
+	}
+
+	_, cmd = p.Update(press("esc"))
+	if !stopped {
+		t.Fatalf("leaving the panel did not stop the listener")
+	}
+	if _, ok := drain(t, cmd)[0].(popMsg); !ok {
+		t.Fatalf("esc did not leave the panel")
+	}
+}
+
+func TestDoctorShowsTheVerdict(t *testing.T) {
+	t.Parallel()
+	f := &fake{report: Report{
+		Root:    "/tmp/gamehost",
+		Healthy: false,
+		Checks: []Check{
+			{Name: "platform", Status: "ok", Detail: "linux"},
+			{Name: "steamcmd", Status: "fail", Detail: "not found"},
+		},
+	}}
+	d := newDoctor(f.backend().Env).(*doctor)
+	cmd := d.Init()
+	d, _ = applyTo(t, d, cmd)
+
+	view := d.View(120, 40)
+	for _, want := range []string{"platform", "steamcmd", "unhealthy", "not found"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("doctor view is missing %q:\n%s", want, view)
+		}
 	}
 }

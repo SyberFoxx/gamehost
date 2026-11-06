@@ -26,17 +26,21 @@ func runDownload(ctx context.Context, command string, args []string, stdout, std
 	if fs.NArg() != 1 {
 		return fmt.Errorf("%s needs exactly one instance name: %w", command, ErrUsage)
 	}
-	name := fs.Arg(0)
 
 	s, err := openStore()
 	if err != nil {
 		return err
 	}
-	inst, err := s.Load(name)
+	inst, err := s.Load(fs.Arg(0))
 	if err != nil {
 		return err
 	}
+	return installInstance(ctx, command, s, inst, stdout)
+}
 
+// installInstance installs or updates the server files of one instance.
+// The lobby reuses it with a writer that turns the SteamCMD output into events.
+func installInstance(ctx context.Context, command string, s *store.Store, inst instance.Instance, stdout io.Writer) error {
 	// An update rewrites the server files under a running process, and the
 	// archive is only consistent while the world is closed.
 	if command == "update" {
@@ -67,11 +71,11 @@ func runDownload(ctx context.Context, command string, args []string, stdout, std
 
 	fmt.Fprintf(stdout, "%s: downloading server files into %s\n", command, inst.InstallDir)
 	if err := runner.Run(ctx, stdout, driver.Installer.InstallArgs(inst.InstallDir)...); err != nil {
-		return fmt.Errorf("%s instance %q: %w", command, name, err)
+		return fmt.Errorf("%s instance %q: %w", command, inst.Name, err)
 	}
 	serverPath := driver.Installer.ServerPath(inst.InstallDir)
 	if _, err := os.Stat(serverPath); err != nil {
-		return fmt.Errorf("%s instance %q: server binary missing after download: %w", command, name, err)
+		return fmt.Errorf("%s instance %q: server binary missing after download: %w", command, inst.Name, err)
 	}
 
 	fmt.Fprintf(stdout, "%s: %s is ready\n", command, serverPath)

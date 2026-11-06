@@ -9,8 +9,10 @@ import (
 	"strings"
 
 	"github.com/syberfoxx/gamehost/internal/home"
+	"github.com/syberfoxx/gamehost/internal/instance"
 	"github.com/syberfoxx/gamehost/internal/process"
 	"github.com/syberfoxx/gamehost/internal/service"
+	"github.com/syberfoxx/gamehost/internal/store"
 )
 
 // runService installs or removes the systemd units of one instance.
@@ -26,6 +28,14 @@ func runService(args []string, stdout, stderr io.Writer) error {
 	default:
 		return fmt.Errorf("unknown service subcommand %q (want install or uninstall): %w", args[0], ErrUsage)
 	}
+}
+
+// serviceInstallOptions are the flags of `service install`.
+type serviceInstallOptions struct {
+	Enable    bool
+	Dir       string
+	Binary    string
+	Systemctl string
 }
 
 // runServiceInstall writes the units of one instance and can enable them.
@@ -46,16 +56,26 @@ func runServiceInstall(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	return installService(s, inst, serviceInstallOptions{
+		Enable:    *enable,
+		Dir:       *dir,
+		Binary:    *binary,
+		Systemctl: *systemctl,
+	}, stdout, stderr)
+}
 
-	unitDir, err := resolveDir(*dir)
+// installService writes the units of one instance and optionally enables them.
+// The lobby reuses it with the same defaults the command uses.
+func installService(s *store.Store, inst instance.Instance, opts serviceInstallOptions, stdout, stderr io.Writer) error {
+	unitDir, err := resolveDir(opts.Dir)
 	if err != nil {
 		return err
 	}
-	exe, err := resolveBinary(*binary)
+	exe, err := resolveBinary(opts.Binary)
 	if err != nil {
 		return err
 	}
-	ctl, err := resolveSystemctl(*systemctl)
+	ctl, err := resolveSystemctl(opts.Systemctl)
 	if err != nil {
 		return err
 	}
@@ -76,7 +96,7 @@ func runServiceInstall(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 
-	opts := service.Options{
+	unit := service.Options{
 		Binary:    exe,
 		Name:      inst.Name,
 		Home:      root,
@@ -85,7 +105,7 @@ func runServiceInstall(args []string, stdout, stderr io.Writer) error {
 		Keep:      inst.Backup.Retention(),
 		Systemctl: ctl,
 	}
-	written, err := service.Install(unitDir, opts)
+	written, err := service.Install(unitDir, unit)
 	if err != nil {
 		return err
 	}
@@ -96,7 +116,7 @@ func runServiceInstall(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "note: %s is a temporary go run binary; build one with: make build, then pass --binary\n", exe)
 	}
 
-	if !*enable {
+	if !opts.Enable {
 		fmt.Fprintf(stdout, "\nnext:\n  systemctl --user daemon-reload\n  systemctl --user enable --now %s\n", service.UnitName(inst.Name))
 		if every > 0 {
 			fmt.Fprintf(stdout, "  systemctl --user enable --now %s\n", service.TimerUnitName(inst.Name))
@@ -160,13 +180,16 @@ func runServiceUninstall(args []string, stdout, stderr io.Writer) error {
 	if fs.NArg() != 1 {
 		return fmt.Errorf("service uninstall needs exactly one instance name: %w", ErrUsage)
 	}
-	name := fs.Arg(0)
+	return uninstallService(*dir, *systemctl, fs.Arg(0), stdout, stderr)
+}
 
-	unitDir, err := resolveDir(*dir)
+// uninstallService disables and removes the units of one name.
+func uninstallService(dir, systemctl, name string, stdout, stderr io.Writer) error {
+	unitDir, err := resolveDir(dir)
 	if err != nil {
 		return err
 	}
-	ctl, err := resolveSystemctl(*systemctl)
+	ctl, err := resolveSystemctl(systemctl)
 	if err != nil {
 		return err
 	}
