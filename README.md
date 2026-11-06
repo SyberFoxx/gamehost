@@ -357,9 +357,11 @@ The main unit runs `gamehost start <name>` in the foreground with `Restart=on-fa
 30-second stop timeout. The backup unit stops the server, archives it and starts it again; the
 restart lives in `ExecStopPost`, so a failed archive still brings the server back.
 
-Core Keeper opens a window even with `-batchmode`. The unit exports the `DISPLAY` it was installed
-from, so it starts while that graphical session exists. For a headless boot, install `xvfb`, run a
-virtual display and install the unit against it:
+The verified Core Keeper build starts with `-batchmode` and **no window**: the server was polled in
+a real X session for the whole startup and none appeared (2026-11-06). The unit still exports the
+`DISPLAY` it was installed from, because a build that does initialize graphics would need that
+session; for a headless boot, install `xvfb`, run a virtual display and install the unit against
+it:
 
 ```bash
 Xvfb :99 -screen 0 1024x768x24 &
@@ -445,7 +447,9 @@ app `1963720`, SteamCMD `1792617903`):
 | `doctor` | `platform`, `data root`, `steamcmd` and `display` all `ok` on the desktop session |
 | `install corekeeper` | `Success! App '1963720' fully installed.`, `files/` is 568 MB |
 | `update corekeeper` | 6.3 s on a warm cache, after writing `pre-update_<timestamp>.tar.gz` (4.7 MB for a 5 MB world) |
+| `start` / `stop` | the server reached `Started session with info: K85KQswu7GWLsQB`, ran 1m46s and stopped with exit `0`; `wmctrl`, `xdotool` and `xwininfo` found **no window** at any point |
 | Lobby smoke test | 22 checks in a real pty: banner, instance, doctor, streamed install, details, logs with a 250-line reload, backups with the retention form, panel listening on `127.0.0.1:8080` |
+| `Stop` from the lobby | confirmation, clean stop and the stopped phase, driving the real running server |
 
 The lobby run used the same SteamCMD and the same instance on disk, so a screen that disagrees with
 a command would have failed the check.
@@ -611,7 +615,7 @@ The repository never contains generated data.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `doctor` reports `steamcmd not found` | SteamCMD is not on `PATH` | install the official tarball under `~/.local/share/steamcmd` or set `GAMEHOST_STEAMCMD` |
-| `start` opens a window | the server initializes graphics even with `-batchmode` | keep the desktop session, or run it under Xvfb |
+| `start` opens a window | some Core Keeper builds initialize graphics despite `-batchmode` | the verified build opens none; if yours does, keep the desktop session or run it under Xvfb |
 | `server is not installed` | `install` was never run | `gamehost install <name>` |
 | SteamCMD exits 0 but nothing installed | SteamCMD reports failures in its output | `install` verifies the binary on disk and fails when it is missing |
 | Assert dump after `stop` during startup | the world is still generating | wait for `Started session` in `gamehost logs -f` before stopping |

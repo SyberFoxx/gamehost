@@ -82,14 +82,18 @@ Network modes:
 
 Validated by running it on this machine:
 
-- The binary starts with `-batchmode` and no `-nographics`; it initializes graphics and opens a
-  window on the desktop display. The official script runs it under Xvfb, so a display is expected.
+- The binary starts with `-batchmode` and no `-nographics`. On the build verified on 2026-11-06 no
+  window ever appears: the X session was polled every 500 ms for the first 20 s and inspected while
+  the server ran, and the only client was an unrelated application. An earlier run of the project
+  reported a window, so the display export and the Xvfb guidance stay as a guard for other builds.
+  The server reaches `Started session with info: <game id>` regardless.
 - No missing shared libraries: the launch needs neither app `1007` nor a custom `LD_LIBRARY_PATH`
   when the desktop session provides the graphics stack.
 
 Still open:
 
-1. Whether running under Xvfb is worth it to hide the window on a desktop host.
+1. Whether a build that opens a window needs Xvfb, or whether keeping the desktop `DISPLAY` is
+   enough. The verified build opens none, so Xvfb is not required for it.
 
 Verified end to end on 2026-11-06 (Nobara Linux 44, x86_64, 12 cores, 30 GB RAM, SteamCMD
 `1792617903` running from `~/.local/share/steamcmd/steamcmd.sh`):
@@ -361,10 +365,9 @@ other terminals or from the HTTP API.
 - `gamehost-<name>-backup.timer` fires five minutes after boot and then once per `--backup-every`.
 
 The renderer doubles `%` (a specifier) and `$` (a variable), quotes every argument outside a small
-safe set, and exports `GAMEHOST_HOME`, so the unit reads the same data as the terminal even when
-systemd's environment differs. It also exports the `DISPLAY` it was installed from: Core Keeper
-opens a window even with `-batchmode`, so a headless host needs `Xvfb` and a reinstall with
-`DISPLAY=:99`. It never runs `systemctl`: enabling, starting and removing are CLI decisions. `service uninstall` disables before deleting, so no `.wants` link survives, and
+safe set, and exports `GAMEHOST_HOME`, so the unit reads the same data as the terminal even when  systemd's environment differs. It also exports the `DISPLAY` it was installed from: the verified
+  build opens no window with `-batchmode`, but a build that initializes graphics would need that
+  session, so a headless host keeps the option of `Xvfb` and a reinstall with `DISPLAY=:99`. It never runs `systemctl`: enabling, starting and removing are CLI decisions. `service uninstall` disables before deleting, so no `.wants` link survives, and
 reinstalling without a schedule removes the old timer.
 
 ### Configuration and the backup window
