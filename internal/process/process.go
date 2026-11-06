@@ -51,6 +51,21 @@ func Start(spec Spec) (*Server, error) {
 	return &Server{cmd: cmd, started: time.Now()}, nil
 }
 
+// StartJoined launches a process in the process group of an existing server,
+// so a single stop signal reaches every shard of one instance.
+func StartJoined(spec Spec, pgid int) (*Server, error) {
+	cmd := exec.Command(spec.Path, spec.Args...)
+	cmd.Dir = spec.Dir
+	cmd.Stdout = spec.Out
+	cmd.Stderr = spec.Out
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: pgid}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start %q: %w", spec.Path, err)
+	}
+	return &Server{cmd: cmd, started: time.Now()}, nil
+}
+
 // StartDetached launches a process in a new session, so it survives its parent.
 // The caller owns the output writer and must keep it valid until the child starts.
 func StartDetached(spec Spec) (int, error) {
@@ -99,6 +114,17 @@ func processState(pid int) (byte, error) {
 		return 0, fmt.Errorf("parse state of pid %d", pid)
 	}
 	return data[end+2], nil
+}
+
+// GroupAlive reports whether any process of the group still exists. A group
+// outlives its leader, which is what keeps stop honest for an instance with
+// more than one shard.
+func GroupAlive(pgid int) bool {
+	if pgid <= 0 {
+		return false
+	}
+	err := syscall.Kill(-pgid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // Stop asks a process group to exit and escalates to SIGKILL after grace.

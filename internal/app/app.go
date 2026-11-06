@@ -279,3 +279,11 @@ func orDefault(value, fallback string) string {
 	}
 	return value
 }
+
+// yesNo names a switch for the show output.
+func yesNo(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
+}

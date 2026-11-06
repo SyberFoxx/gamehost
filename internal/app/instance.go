@@ -26,6 +26,7 @@ func runCreate(args []string, stdout, stderr io.Writer) error {
 	gameID := fs.String("game-id", "", "fixed game ID, 15-28 alphanumeric characters (corekeeper only)")
 	clusterToken := fs.String("cluster-token", "", "Klei cluster token (dontstarvetogether online only)")
 	offline := fs.Bool("offline", false, "LAN-only cluster without a Klei token (dontstarvetogether only)")
+	caves := fs.Bool("caves", false, "run the Caves shard next to the Master (dontstarvetogether only)")
 	backupEvery := fs.String("backup-every", "", "scheduled backup interval such as 24h; off by default")
 	backupKeep := fs.Int("backup-keep", 0, "scheduled archives to keep (default 5)")
 	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
@@ -76,6 +77,7 @@ func runCreate(args []string, stdout, stderr io.Writer) error {
 		opts.Port = *port
 		opts.ClusterToken = *clusterToken
 		opts.Offline = *offline
+		opts.Caves = *caves
 	default:
 		return fmt.Errorf("create: unknown game %q: %w", *gameName, ErrUsage)
 	}
@@ -136,6 +138,7 @@ var flagGames = map[string][]string{
 	"admin-password": {instance.GameProjectZomboid},
 	"cluster-token":  {instance.GameDontStarveTogether},
 	"offline":        {instance.GameDontStarveTogether},
+	"caves":          {instance.GameDontStarveTogether},
 }
 
 // rejectForeignFlags refuses flags that belong to another game.
@@ -174,6 +177,7 @@ func optionsOf(inst instance.Instance) instance.Options {
 		GameID:        inst.GameID,
 		ClusterToken:  inst.ClusterToken,
 		Offline:       inst.Network.Mode == instance.NetworkOffline,
+		Caves:         inst.Caves,
 		BackupEvery:   inst.Backup.Every,
 		BackupKeep:    inst.Backup.Keep,
 		InstallDir:    inst.InstallDir,
@@ -260,6 +264,7 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	backupKeep := fs.Int("backup-keep", 0, "scheduled archives to keep")
 	clusterToken := fs.String("cluster-token", "", "Klei cluster token, empty clears it (dontstarvetogether only)")
 	offline := fs.Bool("offline", false, "run the cluster on the LAN without a Klei token (dontstarvetogether only)")
+	caves := fs.Bool("caves", false, "run the Caves shard next to the Master (dontstarvetogether only)")
 	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
 		return usageError(err)
 	}
@@ -338,6 +343,9 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		if set["offline"] {
 			opts.Offline = *offline
 		}
+		if set["caves"] {
+			opts.Caves = *caves
+		}
 	}
 	if set["backup-every"] {
 		every, err := parseBackupEvery(*backupEvery)
@@ -389,6 +397,7 @@ func instanceRows(inst instance.Instance) [][2]string {
 		return append(rows,
 			[2]string{"max players", fmt.Sprint(inst.MaxPlayers)},
 			[2]string{"cluster token", token},
+			[2]string{"caves shard", yesNo(inst.Caves)},
 			[2]string{"scheduled backup", backupSummary(inst.Backup)},
 		)
 	}

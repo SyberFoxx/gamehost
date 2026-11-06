@@ -270,6 +270,9 @@ func dontStarveTogetherOptions(settings tui.Settings, opts instance.Options) (in
 	opts.Port = port
 	opts.Offline = strings.TrimSpace(settings.Network) == instance.NetworkOffline
 	opts.ClusterToken = strings.TrimSpace(settings.ClusterToken)
+	// An empty value means no: the form sends "no" explicitly, but an old
+	// settings file has no caves key at all.
+	opts.Caves = strings.TrimSpace(settings.Caves) == "yes"
 	opts.BackupEvery = every
 	opts.BackupKeep = keep
 	return opts, nil
@@ -304,6 +307,7 @@ func settingsOf(inst instance.Instance) tui.Settings {
 		GameID:        inst.GameID,
 		Network:       inst.Network.Mode,
 		ClusterToken:  inst.ClusterToken,
+		Caves:         yesNo(inst.Caves),
 		BackupEvery:   inst.Backup.Every,
 		BackupKeep:    strconv.Itoa(inst.Backup.Keep),
 	}

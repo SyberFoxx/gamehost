@@ -367,7 +367,7 @@ func TestCreateFormHidesFieldsPerGame(t *testing.T) {
 		return out
 	}
 
-	if !visible()["seed"] || visible()["udp"] {
+	if !visible()["seed"] || visible()["udp"] || visible()["caves"] {
 		t.Fatalf("Core Keeper fields are wrong: %v", visible())
 	}
 
@@ -387,7 +387,7 @@ func TestCreateFormHidesFieldsPerGame(t *testing.T) {
 	if form.values()["game"] != gameDontStarveTogether {
 		t.Fatalf("game value = %q", form.values()["game"])
 	}
-	if visible()["seed"] || visible()["password"] || visible()["udp"] || !visible()["network"] {
+	if visible()["seed"] || visible()["password"] || visible()["udp"] || !visible()["network"] || !visible()["caves"] {
 		t.Fatalf("Don't Starve Together fields are wrong: %v", visible())
 	}
 	if !visible()["cluster-token"] {

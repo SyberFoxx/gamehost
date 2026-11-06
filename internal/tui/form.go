@@ -131,6 +131,12 @@ var networkChoices = []choice{
 	{"offline", "offline (LAN only)"},
 }
 
+// cavesChoices control the second shard of a Don't Starve Together cluster.
+var cavesChoices = []choice{
+	{"yes", "yes (surface + caves)"},
+	{"no", "no (surface only)"},
+}
+
 // setWhen attaches a visibility rule to every named field.
 func setWhen(fields []formField, rules map[string]func(map[string]string) bool) {
 	for i := range fields {
@@ -440,6 +446,7 @@ func settingsFrom(values map[string]string) Settings {
 		GameID:        values["game-id"],
 		Network:       values["network"],
 		ClusterToken:  values["cluster-token"],
+		Caves:         values["caves"],
 		BackupEvery:   values["backup-every"],
 		BackupKeep:    values["backup-keep"],
 	}
@@ -483,6 +490,7 @@ func newCreateForm(ctx context.Context, backend Backend) screen {
 		choiceField("network", "Cluster", "online registers with Klei; offline is LAN only", "online", networkChoices...),
 		textField("port", "Port", "empty uses the default: 10999 for Don't Starve Together", ""),
 		textField("cluster-token", "Cluster token", "from accounts.klei.com, online clusters only", ""),
+		choiceField("caves", "Caves shard", "the second shard takes the next UDP port", "no", cavesChoices...),
 		textField("udp", "Direct port", "Project Zomboid direct-connect port", ""),
 		textField("password", "Join password", "empty means anyone with the address can join", ""),
 		textField("admin-password", "Admin password", "required on the first start", ""),
@@ -499,6 +507,7 @@ func newCreateForm(ctx context.Context, backend Backend) screen {
 		"game-id":        whenGame(gameCoreKeeper),
 		"network":        whenGame(gameDontStarveTogether),
 		"cluster-token":  whenOnlineCluster,
+		"caves":          whenGame(gameDontStarveTogether),
 		"udp":            whenGame(gameProjectZomboid),
 		"admin-password": whenGame(gameProjectZomboid),
 	})
@@ -530,6 +539,7 @@ func newSettingsForm(ctx context.Context, backend Backend, settings Settings) sc
 		choiceField("network", "Cluster", "online registers with Klei; offline is LAN only", settings.Network, networkChoices...),
 		textField("port", "Port", "empty uses the default: 10999 for Don't Starve Together", settings.Port),
 		textField("cluster-token", "Cluster token", "from accounts.klei.com, online clusters only", settings.ClusterToken),
+		choiceField("caves", "Caves shard", "the second shard takes the next UDP port", settings.Caves, cavesChoices...),
 		textField("udp", "Direct port", "Project Zomboid direct-connect port", settings.UDPPort),
 		textField("password", "Join password", "empty means anyone with the address can join", settings.Password),
 		textField("admin-password", "Admin password", "required on the first start", settings.AdminPassword),
@@ -546,6 +556,7 @@ func newSettingsForm(ctx context.Context, backend Backend, settings Settings) sc
 		"game-id":        whenGame(gameCoreKeeper),
 		"network":        whenGame(gameDontStarveTogether),
 		"cluster-token":  whenOnlineCluster,
+		"caves":          whenGame(gameDontStarveTogether),
 		"udp":            whenGame(gameProjectZomboid),
 		"admin-password": whenGame(gameProjectZomboid),
 	})

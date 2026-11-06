@@ -2,6 +2,8 @@
 package dontstarvetogether
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,8 +22,14 @@ const (
 	Binary = "bin64/dontstarve_dedicated_server_nullrenderer_x64"
 	// ConfDir is the -conf_dir the driver passes; the cluster lives under it.
 	ConfDir = "gamehost"
-	// Shard is the only shard gamehost runs. Caves would be a second one.
+	// Shard is the surface shard, the one that owns the cluster.
 	Shard = "Master"
+	// CavesShard is the underground shard, optional and started next to the Master.
+	CavesShard = "Caves"
+	// ShardPort is the internal port the two shards talk over on localhost.
+	ShardPort = 10888
+	// CavesPortOffset keeps the Caves UDP port next to the Master one.
+	CavesPortOffset = 1
 	// TokenFile is where the server reads the Klei cluster token.
 	TokenFile = "cluster_token.txt"
 )
@@ -46,20 +54,33 @@ func ClusterDir(inst instance.Instance) string {
 	return filepath.Join(inst.DataDir, ConfDir, inst.Name)
 }
 
-// ShardDir returns the directory of the only shard, the Master.
+// ShardDir returns the directory of the surface shard, the Master.
 func ShardDir(inst instance.Instance) string {
 	return filepath.Join(ClusterDir(inst), Shard)
 }
 
-// Args returns the launch arguments for an instance.
+// CavesDir returns the directory of the underground shard.
+func CavesDir(inst instance.Instance) string {
+	return filepath.Join(ClusterDir(inst), CavesShard)
+}
+
+// CavesPort returns the UDP port the Caves shard listens on.
+func CavesPort(inst instance.Instance) int { return inst.Network.Port + CavesPortOffset }
+
+// Args returns the launch arguments of the Master shard.
 func Args(inst instance.Instance) []string {
+	return shardArgs(inst, Shard, inst.Network.Port)
+}
+
+// shardArgs returns the launch arguments of one shard on one port.
+func shardArgs(inst instance.Instance, shard string, port int) []string {
 	args := []string{
 		"-persistent_storage_root", inst.DataDir,
 		"-conf_dir", ConfDir,
 		"-cluster", inst.Name,
-		"-shard", Shard,
+		"-shard", shard,
 		"-players", strconv.Itoa(inst.MaxPlayers),
-		"-port", strconv.Itoa(inst.Network.Port),
+		"-port", strconv.Itoa(port),
 	}
 	if inst.Network.Mode == instance.NetworkOffline {
 		args = append(args, "-offline")
@@ -77,16 +98,31 @@ func Prepare(inst instance.Instance) error {
 	}
 
 	clusterDir, shardDir := ClusterDir(inst), ShardDir(inst)
-	for _, dir := range []string{clusterDir, shardDir} {
+	dirs := []string{clusterDir, shardDir}
+	if inst.Caves {
+		dirs = append(dirs, CavesDir(inst))
+	}
+	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create cluster directory %q: %w", dir, err)
 		}
 	}
 
-	if err := writeMissing(filepath.Join(clusterDir, "cluster.ini"), clusterINI(inst)); err != nil {
+	clusterINI := filepath.Join(clusterDir, "cluster.ini")
+	if err := writeMissing(clusterINI, renderClusterINI(inst)); err != nil {
 		return err
 	}
-	if err := writeMissing(filepath.Join(shardDir, "server.ini"), serverINI(inst)); err != nil {
+	if inst.Caves {
+		// A cluster created before Caves support has no shard section; add it
+		// without touching anything the player wrote.
+		if err := ensureShardSection(clusterINI); err != nil {
+			return err
+		}
+		if err := writeMissing(filepath.Join(CavesDir(inst), "server.ini"), renderCavesINI(inst)); err != nil {
+			return err
+		}
+	}
+	if err := writeMissing(filepath.Join(shardDir, "server.ini"), renderServerINI(inst)); err != nil {
 		return err
 	}
 
@@ -113,8 +149,40 @@ func writeMissing(path string, data []byte) error {
 	return nil
 }
 
-// clusterINI renders the settings shared by every shard of the cluster.
-func clusterINI(inst instance.Instance) []byte {
+// ensureShardSection appends the shard settings the Caves shard needs when the
+// file predates them. An existing section is left exactly as it is.
+func ensureShardSection(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %q: %w", path, err)
+	}
+	if strings.Contains(string(data), "[SHARD]") {
+		return nil
+	}
+
+	key, err := newClusterKey()
+	if err != nil {
+		return err
+	}
+	section := fmt.Sprintf("\n[SHARD]\nshard_enabled = true\nbind_ip = 127.0.0.1\nmaster_ip = 127.0.0.1\nmaster_port = %d\ncluster_key = %s\n", ShardPort, key)
+	updated := append(append([]byte{}, data...), []byte(section)...)
+	if err := atomicfile.Replace(path, updated, 0o644); err != nil {
+		return fmt.Errorf("add the shard section to %q: %w", path, err)
+	}
+	return nil
+}
+
+// newClusterKey returns the shared secret the two shards authenticate with.
+func newClusterKey() (string, error) {
+	key := make([]byte, 16)
+	if _, err := rand.Read(key); err != nil {
+		return "", fmt.Errorf("generate cluster key: %w", err)
+	}
+	return hex.EncodeToString(key), nil
+}
+
+// renderClusterINI renders the settings shared by every shard of the cluster.
+func renderClusterINI(inst instance.Instance) []byte {
 	var b strings.Builder
 	b.WriteString("[GAMEPLAY]\n")
 	b.WriteString("game_mode = survival\n")
@@ -134,20 +202,34 @@ func clusterINI(inst instance.Instance) []byte {
 	return []byte(b.String())
 }
 
-// serverINI renders the settings of the master shard.
-func serverINI(inst instance.Instance) []byte {
+// renderServerINI renders the settings of the master shard.
+func renderServerINI(inst instance.Instance) []byte {
+	return renderShardINI(inst.Network.Port, true, "", 27018, 27019)
+}
+
+// renderCavesINI renders the settings of the underground shard.
+func renderCavesINI(inst instance.Instance) []byte {
+	return renderShardINI(CavesPort(inst), false, CavesShard, 27020, 27021)
+}
+
+// renderShardINI renders one server.ini without ever touching the other.
+func renderShardINI(port int, master bool, name string, masterPort, authPort int) []byte {
 	var b strings.Builder
 	b.WriteString("[NETWORK]\n")
-	fmt.Fprintf(&b, "server_port = %d\n\n", inst.Network.Port)
+	fmt.Fprintf(&b, "server_port = %d\n\n", port)
 
 	b.WriteString("[SHARD]\n")
-	b.WriteString("is_master = true\n\n")
+	fmt.Fprintf(&b, "is_master = %t\n", master)
+	if name != "" {
+		fmt.Fprintf(&b, "name = %s\n", name)
+	}
+	b.WriteString("\n")
 
-	// The master uses the documented default Steam ports; a second shard
-	// would move to 27020 and 27021.
+	// The master uses the documented default Steam ports; the Caves shard
+	// moves to 27020 and 27021.
 	b.WriteString("[STEAM]\n")
-	b.WriteString("master_server_port = 27018\n")
-	b.WriteString("authentication_port = 27019\n")
+	fmt.Fprintf(&b, "master_server_port = %d\n", masterPort)
+	fmt.Fprintf(&b, "authentication_port = %d\n", authPort)
 	return []byte(b.String())
 }
 
@@ -169,11 +251,19 @@ type Runner struct{}
 // Launch returns the command line that starts the server.
 // The binary needs its own directory as working directory for its libraries.
 func (Runner) Launch(inst instance.Instance) (game.Launch, error) {
-	return game.Launch{
+	launch := game.Launch{
 		Path: ServerPath(inst.InstallDir),
 		Args: Args(inst),
 		Dir:  filepath.Dir(ServerPath(inst.InstallDir)),
-	}, nil
+	}
+	if inst.Caves {
+		launch.Extra = []game.Launch{{
+			Path: ServerPath(inst.InstallDir),
+			Args: shardArgs(inst, CavesShard, CavesPort(inst)),
+			Dir:  launch.Dir,
+		}}
+	}
+	return launch, nil
 }
 
 // Prepare writes the cluster files the server reads at startup.

@@ -270,6 +270,18 @@ func TestValidateDontStarveTogether(t *testing.T) {
 		{"admin password", func(i Instance) Instance { i.AdminPassword = "secret"; return i }, true},
 		{"join password", func(i Instance) Instance { i.Network.Password = "secret"; return i }, true},
 		{"udp port", func(i Instance) Instance { i.Network.UDPPort = 16262; return i }, true},
+		{"caves online", func(i Instance) Instance { i.Caves = true; return i }, false},
+		{"caves above the port range", func(i Instance) Instance {
+			i.Caves = true
+			i.Network.Port = 65535
+			return i
+		}, true},
+		{"offline caves above the LAN range", func(i Instance) Instance {
+			i.Network.Mode = NetworkOffline
+			i.Network.Port = 11018
+			i.Caves = true
+			return i
+		}, true},
 	}
 
 	for _, tt := range tests {
@@ -311,6 +323,7 @@ func TestValidate(t *testing.T) {
 		{"negative world index", func(i Instance) Instance { i.World.Index = -1; return i }, true},
 		{"udp port", func(i Instance) Instance { i.Network.UDPPort = 16262; return i }, true},
 		{"admin password", func(i Instance) Instance { i.AdminPassword = "secret"; return i }, true},
+		{"caves shard", func(i Instance) Instance { i.Caves = true; return i }, true},
 		{"scheduled backup", func(i Instance) Instance { i.Backup = Backup{Every: "24h", Keep: 3}; return i }, false},
 		{"short backup interval", func(i Instance) Instance { i.Backup = Backup{Every: "1s", Keep: 3}; return i }, true},
 		{"backup interval without a duration", func(i Instance) Instance { i.Backup = Backup{Every: "daily", Keep: 3}; return i }, true},

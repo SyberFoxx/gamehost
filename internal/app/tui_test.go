@@ -230,10 +230,11 @@ func TestDontStarveTogetherOptions(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name    string
-		input   tui.Settings
-		want    instance.Network
-		wantErr bool
+		name      string
+		input     tui.Settings
+		want      instance.Network
+		wantCaves bool
+		wantErr   bool
 	}{
 		{
 			name:  "online keeps the token",
@@ -241,9 +242,10 @@ func TestDontStarveTogetherOptions(t *testing.T) {
 			want:  instance.Network{Mode: instance.NetworkOnline, Port: instance.DontStarveTogetherPort},
 		},
 		{
-			name:  "offline ignores the token",
-			input: tui.Settings{Game: instance.GameDontStarveTogether, MaxPlayers: "6", Network: "offline"},
-			want:  instance.Network{Mode: instance.NetworkOffline, Port: instance.DontStarveTogetherPort},
+			name:      "offline with caves",
+			input:     tui.Settings{Game: instance.GameDontStarveTogether, MaxPlayers: "6", Network: "offline", Caves: "yes"},
+			want:      instance.Network{Mode: instance.NetworkOffline, Port: instance.DontStarveTogetherPort},
+			wantCaves: true,
 		},
 		{name: "online without a token", input: tui.Settings{Game: instance.GameDontStarveTogether, MaxPlayers: "6", Network: "online"}, wantErr: true},
 		{name: "too many players", input: tui.Settings{Game: instance.GameDontStarveTogether, MaxPlayers: "65", Network: "online", ClusterToken: "t"}, wantErr: true},
@@ -275,6 +277,9 @@ func TestDontStarveTogetherOptions(t *testing.T) {
 			}
 			if inst.Network != tt.want {
 				t.Errorf("Network = %+v, want %+v", inst.Network, tt.want)
+			}
+			if inst.Caves != tt.wantCaves {
+				t.Errorf("Caves = %v, want %v", inst.Caves, tt.wantCaves)
 			}
 		})
 	}

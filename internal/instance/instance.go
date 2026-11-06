@@ -149,7 +149,9 @@ type Instance struct {
 	// ClusterToken authorises an online Don't Starve Together cluster; the
 	// driver writes it to cluster_token.txt before the launch.
 	ClusterToken string `json:"cluster_token,omitempty"`
-	Backup       Backup `json:"backup"`
+	// Caves runs the Caves shard next to the Master on the same machine.
+	Caves  bool   `json:"caves,omitempty"`
+	Backup Backup `json:"backup"`
 }
 
 // Options carries the user-facing settings of a new instance.
@@ -166,6 +168,7 @@ type Options struct {
 	GameID        string
 	ClusterToken  string
 	Offline       bool
+	Caves         bool
 	BackupEvery   string
 	BackupKeep    int
 	InstallDir    string
@@ -242,6 +245,7 @@ func New(name string, opts Options) (Instance, error) {
 		GameID:        opts.GameID,
 		AdminPassword: opts.AdminPassword,
 		ClusterToken:  opts.ClusterToken,
+		Caves:         opts.Caves,
 		Backup:        backup,
 	}
 	if err := inst.Validate(); err != nil {
@@ -309,6 +313,9 @@ func (i Instance) validateCoreKeeper() error {
 	if i.AdminPassword != "" {
 		return fmt.Errorf("admin password is only used by project zomboid: %w", ErrInvalid)
 	}
+	if i.Caves {
+		return fmt.Errorf("the caves shard belongs to don't starve together: %w", ErrInvalid)
+	}
 	// Game IDs are alphanumeric and skip characters that are easy to confuse.
 	if i.GameID != "" && !validGameID(i.GameID) {
 		return fmt.Errorf("game id %q must be %d-%d characters without Y, y, x, 0 or O: %w", i.GameID, minGameIDLen, maxGameIDLen, ErrInvalid)
@@ -331,6 +338,9 @@ func (i Instance) validateProjectZomboid() error {
 	}
 	if i.GameID != "" {
 		return fmt.Errorf("game id belongs to core keeper: %w", ErrInvalid)
+	}
+	if i.Caves {
+		return fmt.Errorf("the caves shard belongs to don't starve together: %w", ErrInvalid)
 	}
 	if i.Network.Password != "" {
 		return fmt.Errorf("join password is configured in the Project Zomboid ini, not by gamehost: %w", ErrInvalid)
@@ -394,6 +404,16 @@ func (i Instance) validateDontStarveTogether() error {
 	}
 	if i.Network.Port < 1 || i.Network.Port > 65535 {
 		return fmt.Errorf("game port %d must be between 1 and 65535: %w", i.Network.Port, ErrInvalid)
+	}
+	if i.Caves {
+		// The Caves shard listens on the next UDP port of the same range.
+		cavesPort := i.Network.Port + 1
+		if cavesPort > 65535 {
+			return fmt.Errorf("caves port %d is above 65535, lower the game port: %w", cavesPort, ErrInvalid)
+		}
+		if i.Network.Mode == NetworkOffline && cavesPort > dstLanMaxPort {
+			return fmt.Errorf("offline caves port %d must be between %d and %d: %w", cavesPort, dstLanMinPort, dstLanMaxPort, ErrInvalid)
+		}
 	}
 	return nil
 }

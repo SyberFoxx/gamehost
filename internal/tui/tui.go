@@ -67,6 +67,7 @@ type Settings struct {
 	GameID        string
 	Network       string
 	ClusterToken  string
+	Caves         string
 	BackupEvery   string
 	BackupKeep    string
 }

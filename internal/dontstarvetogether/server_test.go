@@ -192,6 +192,136 @@ func TestLaunchRunsFromBin64(t *testing.T) {
 	}
 }
 
+func TestCavesShard(t *testing.T) {
+	inst := testInstance(t)
+	inst.Caves = true
+
+	t.Run("launch adds a second shard", func(t *testing.T) {
+		launch, err := (Runner{}).Launch(inst)
+		if err != nil {
+			t.Fatalf("launch: %v", err)
+		}
+		if len(launch.Extra) != 1 {
+			t.Fatalf("extra launches = %d, want 1", len(launch.Extra))
+		}
+		args := strings.Join(launch.Extra[0].Args, " ")
+		for _, want := range []string{"-shard Caves", "-port 11001"} {
+			if !strings.Contains(args, want) {
+				t.Errorf("caves args %q lack %q", args, want)
+			}
+		}
+	})
+
+	t.Run("prepare writes both shards", func(t *testing.T) {
+		if err := Prepare(inst); err != nil {
+			t.Fatalf("prepare: %v", err)
+		}
+
+		cluster, err := os.ReadFile(filepath.Join(ClusterDir(inst), "cluster.ini"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"[SHARD]", "shard_enabled = true", "master_port = 10888", "cluster_key = "} {
+			if !strings.Contains(string(cluster), want) {
+				t.Errorf("cluster.ini lacks %q:\n%s", want, cluster)
+			}
+		}
+
+		caves, err := os.ReadFile(filepath.Join(CavesDir(inst), "server.ini"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"server_port = 11001", "is_master = false", "name = Caves"} {
+			if !strings.Contains(string(caves), want) {
+				t.Errorf("Caves/server.ini lacks %q:\n%s", want, caves)
+			}
+		}
+	})
+}
+
+func TestCavesSectionIsNotDuplicated(t *testing.T) {
+	inst := testInstance(t)
+	inst.Caves = true
+	if err := Prepare(inst); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	// The section already exists, so a second prepare must not add a key again.
+	if err := Prepare(inst); err != nil {
+		t.Fatalf("second prepare: %v", err)
+	}
+
+	cluster, err := os.ReadFile(filepath.Join(ClusterDir(inst), "cluster.ini"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(cluster), "[SHARD]"); got != 1 {
+		t.Errorf("cluster.ini has %d shard sections:\n%s", got, cluster)
+	}
+}
+
+func TestAdminList(t *testing.T) {
+	inst := testInstance(t)
+
+	tests := []struct {
+		name    string
+		id      string
+		wantErr bool
+	}{
+		{"valid", "KU_QDNly1sC", false},
+		{"empty", "", true},
+		{"no prefix", "qdnly1sc", true},
+		{"too short", "KU_ab", true},
+		{"dash", "KU_ab-cd", true},
+		{"spaces", "KU_ab cd", true},
+	}
+	for _, tt := range tests {
+		t.Run("parse "+tt.name, func(t *testing.T) {
+			_, err := ParseAdminID(tt.id)
+			if gotErr := err != nil; gotErr != tt.wantErr {
+				t.Fatalf("ParseAdminID(%q) error = %v, wantErr %v", tt.id, err, tt.wantErr)
+			}
+		})
+	}
+
+	t.Run("add, list and remove", func(t *testing.T) {
+		added, err := (Runner{}).AddAdmin(inst, " KU_QDNly1sC ", "", false)
+		if err != nil || !added {
+			t.Fatalf("AddAdmin() = %v, %v", added, err)
+		}
+		if again, err := (Runner{}).AddAdmin(inst, "KU_QDNly1sC", "", false); err != nil || again {
+			t.Fatalf("duplicate AddAdmin() = %v, %v", again, err)
+		}
+
+		list, err := (Runner{}).Admins(inst)
+		if err != nil {
+			t.Fatalf("Admins(): %v", err)
+		}
+		if len(list) != 1 || list[0].ID != "KU_QDNly1sC" {
+			t.Fatalf("Admins() = %#v", list)
+		}
+
+		if err := (Runner{}).RemoveAdmin(inst, "KU_unknown1"); err == nil {
+			t.Fatal("RemoveAdmin accepted a missing id")
+		}
+		if err := (Runner{}).RemoveAdmin(inst, "KU_QDNly1sC"); err != nil {
+			t.Fatalf("RemoveAdmin(): %v", err)
+		}
+		data, err := os.ReadFile(AdminFile(inst))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimSpace(string(data)) != "" {
+			t.Errorf("adminlist.txt = %q after the removal", data)
+		}
+	})
+
+	t.Run("limited is refused", func(t *testing.T) {
+		if _, err := (Runner{}).AddAdmin(inst, "KU_QDNly1sC", "", true); err == nil {
+			t.Fatal("AddAdmin accepted limited privileges")
+		}
+	})
+}
+
 func TestInstallArgs(t *testing.T) {
 	args := strings.Join(InstallArgs("/games/dst"), " ")
 	want := "+force_install_dir /games/dst +login anonymous +app_update 343050 validate +quit"

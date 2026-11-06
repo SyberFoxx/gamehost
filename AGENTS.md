@@ -47,7 +47,8 @@ Supported today: Core Keeper (`1963720`), Project Zomboid (`380870`) and Don't S
 (`343050`). The Don't Starve Together driver creates `cluster.ini`, `Master/server.ini` and, for an
 online cluster, `cluster_token.txt` (mode `0600`) before the launch through `game.Preparer`; it
 writes the ini files only when they are missing, because the server appends its own sections and
-the player owns the rest.
+the player owns the rest. With `--caves` it also adds the `[SHARD]` section once, writes
+`Caves/server.ini`, and launches a second process in the Master's process group.
 A game is one driver package plus one entry in `internal/games`; verify its contract in the official
 documentation and record the facts in `docs/design.md` before writing flags.
 
@@ -157,6 +158,16 @@ Candidates, easiest first:
   exits 127 with `error while loading shared libraries` until it is on the loader path.
 - DST has no game ID: the cluster is found in the server browser by its `cluster_name`, or by
   address and UDP port.
+- The Caves shard is a second process with `-shard Caves` and the next UDP port. Both shards share
+  the Master's process group, so `state.json` keeps one pid and one stop signal reaches both; a
+  shard that dies unasked stops the instance instead of leaving dead portals behind.
+- `cluster.ini` gets its `[SHARD]` section only once (with `cluster_key`, `master_port 10888` and
+  `127.0.0.1`); never rewrite the rest of the file. `Caves/server.ini` uses Steam ports `27020` and
+  `27021`.
+- DST admins live in `<cluster>/adminlist.txt`, one `KU_...` id per line, and the server reads it at
+  startup. There are no privileges and no display names; reject `--limited` instead of writing a
+  file the server would ignore. `game.AdminStore` is the only interface the CLI and the lobby use,
+  with Core Keeper and DST implementing it.
 - The lobby only opens when stdin and stdout are terminals, and the gate lives in `app.Run` so
   `main` stays a dispatcher. Do not move it into `main`, and keep the stdin check: a redirected
   stdin would otherwise open an invisible UI. The lobby is the front end of every command, but the

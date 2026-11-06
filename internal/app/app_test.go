@@ -866,6 +866,80 @@ func TestImportWorldRefusesRunningInstance(t *testing.T) {
 	}
 }
 
+// covers the Caves shard and the Klei admin list end to end
+func TestDontStarveTogetherCavesAndAdmins(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	out, err := runArgs(t, "create", "cave", "--game", "dontstarvetogether", "--offline", "--caves", "--world-name", "Owls")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if strings.Contains(out, "caves") {
+		t.Fatalf("create output = %q", out)
+	}
+	out, err = runArgs(t, "show", "cave")
+	if err != nil {
+		t.Fatalf("show: %v", err)
+	}
+	if !strings.Contains(out, "caves shard") || !strings.Contains(out, "yes") {
+		t.Errorf("show output = %q", out)
+	}
+
+	if _, err := runArgs(t, "admin", "add", "cave", "KU_QDNly1sC"); err != nil {
+		t.Fatalf("admin add: %v", err)
+	}
+	out, err = runArgs(t, "admin", "list", "cave")
+	if err != nil {
+		t.Fatalf("admin list: %v", err)
+	}
+	if !strings.Contains(out, "KU_QDNly1sC") || !strings.Contains(out, "full") {
+		t.Errorf("admin list output = %q", out)
+	}
+
+	path := filepath.Join(os.Getenv("GAMEHOST_HOME"), "servers", "cave", "data", "gamehost", "cave", "adminlist.txt")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read adminlist: %v", err)
+	}
+	if string(data) != "KU_QDNly1sC\n" {
+		t.Errorf("adminlist.txt = %q", data)
+	}
+
+	if _, err := runArgs(t, "admin", "remove", "cave", "KU_QDNly1sC"); err != nil {
+		t.Fatalf("admin remove: %v", err)
+	}
+	out, err = runArgs(t, "admin", "list", "cave")
+	if err != nil {
+		t.Fatalf("admin list after remove: %v", err)
+	}
+	if strings.Contains(out, "KU_QDNly1sC") {
+		t.Errorf("admin list still shows the removed id: %q", out)
+	}
+
+	// The lobby reaches the same list through its own adapter.
+	if _, err := lobbyAdminAdd("cave", "KU_abc12345", "", false); err != nil {
+		t.Fatalf("lobbyAdminAdd: %v", err)
+	}
+	list, err := lobbyAdmins("cave")
+	if err != nil {
+		t.Fatalf("lobbyAdmins: %v", err)
+	}
+	if len(list) != 1 || list[0].SteamID != "KU_abc12345" || list[0].Privileges != "full" {
+		t.Fatalf("lobbyAdmins = %#v", list)
+	}
+	if _, err := lobbyAdminRemove("cave", "KU_abc12345"); err != nil {
+		t.Fatalf("lobbyAdminRemove: %v", err)
+	}
+
+	// Project Zomboid has no admin list yet, and that is an error, not a crash.
+	if _, err := runArgs(t, "create", "zomboid", "--game", "projectzomboid", "--admin-password", "secret"); err != nil {
+		t.Fatalf("create zomboid: %v", err)
+	}
+	if _, err := runArgs(t, "admin", "list", "zomboid"); err == nil {
+		t.Fatal("admin list accepted Project Zomboid")
+	}
+}
+
 // covers adding, listing and removing admins
 func TestAdminCommands(t *testing.T) {
 	t.Setenv("GAMEHOST_HOME", t.TempDir())

@@ -168,7 +168,7 @@ func (a *admins) View(width, _ int) string {
 
 	body := head + "\n\n"
 	if len(a.list) == 0 {
-		body += dimStyle.Render("no admins yet: press a to add the first Steam account")
+		body += dimStyle.Render("no admins yet: press a to add the first player")
 	} else {
 		lines := make([]string, 0, len(a.list))
 		for i, admin := range a.list {
@@ -213,9 +213,9 @@ func newAdminForm(ctx context.Context, backend AdminBackend, name string) screen
 		title: "Add admin · " + name,
 		cli:   "gamehost admin add " + name,
 		fields: []formField{
-			textField("steam", "Steam ID", "64-bit account id, digits only", ""),
-			textField("display", "Display name", "optional, shown in this list", ""),
-			choiceField("privileges", "Privileges", "limited admins miss some commands", "full",
+			textField("steam", "Player ID", "Steam ID (Core Keeper) or Klei ID such as KU_abc123 (Don't Starve Together)", ""),
+			textField("display", "Display name", "optional, Core Keeper only", ""),
+			choiceField("privileges", "Privileges", "limited is Core Keeper only; DST admins are always full", "full",
 				choice{"full", "full"}, choice{"limited", "limited"}),
 		},
 		submit: func(values map[string]string) (string, error) {

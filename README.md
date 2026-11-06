@@ -41,6 +41,8 @@ concurrency and tests with `-race`.
 | M11 | `service install` / `service uninstall`: systemd user units | done |
 | M12 | interactive lobby: banner, arrow-key menu, log screen | done |
 | M13 | lobby as the whole program: instances, files, backups, admins, systemd, panel | done |
+| M14 | Don't Starve Together driver: online and offline clusters, cluster files, token | done |
+| M15 | Caves shard for DST, Klei admins from the terminal and the lobby | done |
 
 ## Features
 
@@ -59,6 +61,8 @@ concurrency and tests with `-race`.
   stream, embedding the page in the binary.
 - Runs three games behind one driver interface: Core Keeper, Project Zomboid and Don't Starve
   Together (online with a Klei token, or LAN-only offline).
+- Runs the Don't Starve Together surface world and its Caves shard as one instance: one start, one
+  stop and one backup cover both processes.
 - Imports an existing `.world.gzip` save into an instance, archiving the current world first.
 - Holds a per-instance lock, so two servers or a backup and a start can never share one world.
 - Keeps the newest ten run logs and prunes the rest.
@@ -66,8 +70,8 @@ concurrency and tests with `-race`.
 - Lists, creates and restores backups from the API and the panel, not only the terminal.
 - Runs an opt-in backup window: `serve` owns it, or `service install` writes a systemd timer that
   stops, archives, prunes and starts the server again.
-- Edits the Core Keeper admin list from the terminal, with Steam ID validation and the server's
-  own file shape.
+- Edits the admin list from the terminal or the lobby: Core Keeper Steam IDs in `Admins.json`, and
+  Klei IDs (`KU_...`) in Don't Starve Together `adminlist.txt`.
 - Starts instances when the daemon boots, so one systemd unit brings the server back after a
   reboot.
 - Writes its own systemd user units: the server with restart-on-crash, and a timer for the backup
@@ -345,6 +349,12 @@ A Steam ID64 is the 17-digit number that starts with `7656119`. `full` (privileg
 every admin command; `--limited` stores privileges `1`, the level the game marks as limited.
 `admin list` works while the server runs; `add` and `remove` refuse until it is stopped.
 
+Don't Starve Together uses the same commands with the Klei user id that the game shows (`KU_...`).
+The driver writes one id per line to `data/gamehost/<name>/adminlist.txt`; names and limited
+privileges do not exist there, so the driver ignores a display name and rejects `--limited`. The
+lobby reaches the same list with `a` and `d`, so a server can be administered without entering the
+game.
+
 ### Running it as a systemd user service
 
 `start --detach` survives closing the terminal, not a reboot. `service install` writes the units
@@ -440,7 +450,8 @@ max players and the join password stay in `data/Server/base.ini`.
 Don't Starve Together uses the same commands; `--offline` runs a LAN cluster without a Klei token,
 while an online cluster takes `--cluster-token`. `status` reports the `cluster_name` players see in
 the server browser, and gamehost writes `cluster.ini`/`Master/server.ini` under
-`data/gamehost/<name>/` the first time.
+`data/gamehost/<name>/` the first time. Add `--caves` to run the underground shard too: it uses the
+next UDP port and is stopped together with the surface world.
 
 ## Verifying a real Core Keeper server
 
@@ -494,9 +505,9 @@ a command would have failed the check.
 | `gamehost import-world <name> <file>` | copy an existing `.world.gzip` save into the instance slot (stopped only) |
 | `gamehost backup <name> [-keep N]` | archive `data/`, keeping the newest `N` (default 5) |
 | `gamehost restore <name> <archive>` | replace `data/` from a backup, after saving the current one |
-| `gamehost admin list <name>` | print the admins stored in `data/Admins.json` |
-| `gamehost admin add <name> <steamid> [--name NAME] [--limited]` | grant admin rights (stopped only) |
-| `gamehost admin remove <name> <steamid>` | drop admin rights (stopped only) |
+| `gamehost admin list <name>` | print the admin list of the game |
+| `gamehost admin add <name> <id> [--name NAME] [--limited]` | grant admin rights; Steam ID or `KU_...` id (stopped only) |
+| `gamehost admin remove <name> <id>` | drop admin rights (stopped only) |
 | `gamehost serve [--addr]` | serve the HTTP API and web panel (default `127.0.0.1:8080`) |
 | `gamehost serve --start <name>` | start that instance when the daemon boots; repeatable |
 | `gamehost service install <name> [--enable]` | write the systemd user units, optionally enabling and starting them |
@@ -522,6 +533,7 @@ a command would have failed the check.
 | `--game-id` | generated | fixed game ID, 15–28 characters without `Y y x 0 O` (Core Keeper only) |
 | `--cluster-token` | none | Klei token from `accounts.klei.com` (Don't Starve Together online only) |
 | `--offline` | `false` | LAN-only cluster without a Klei token (Don't Starve Together only) |
+| `--caves` | `false` | run the Caves shard next to the surface world (Don't Starve Together only) |
 | `--backup-every` | off | scheduled backup interval such as `24h`; needs `gamehost serve` running |
 | `--backup-keep` | `5` | scheduled archives to keep, oldest removed first |
 
@@ -649,6 +661,7 @@ The repository never contains generated data.
 | `start-server.sh: Permission denied` | SteamCMD kept the script without the execute bit | `chmod +x files/start-server.sh` |
 | Don't Starve Together exits `127` with `libcurl-gnutls.so.4` | Fedora and Nobara ship only the OpenSSL curl | provide the gnutls soname on the loader path, or use a distribution that packages it |
 | Don't Starve Together refuses to start an offline cluster | its UDP port must be 10998–11018 | `gamehost config <name> --port 10999` |
+| Caves crashes the whole instance | the Caves shard could not read its ini, or its port is taken | check `Caves/server.ini` and that `port + 1` is free |
 | `backup`, `restore` or `update` refuses to run | the server holds the world files | `gamehost stop <name>` first |
 | `instance is already running` or `instance is in use by another gamehost command` | the server, or a command between its check and its state write, holds `run.lock` | wait for it, or `gamehost stop <name>` if a server was left behind |
 | A scheduled backup never runs | `serve` is not running, or the interval has not elapsed since the newest archive | keep `gamehost serve` running and watch its output |
