@@ -125,6 +125,7 @@ type Backend struct {
 	Logs      LogBackend
 	Files     FileBackend
 	Admins    AdminBackend
+	Mods      ModsBackend
 	Service   ServiceBackend
 	Env       EnvBackend
 	Panel     PanelBackend
@@ -158,6 +159,19 @@ type LogBackend struct {
 type FileBackend struct {
 	Install func(ctx context.Context, name string) <-chan Event
 	Update  func(ctx context.Context, name string) <-chan Event
+}
+
+// Mods is the mod configuration of one instance.
+type Mods struct {
+	Workshop []string
+	Enabled  []string
+}
+
+// ModsBackend manages the mod list of a server that loads mods from a file.
+type ModsBackend struct {
+	List   func(name string) (Mods, error)
+	Add    func(name, id string, workshop bool) (string, error)
+	Remove func(name, id string, workshop bool) (string, error)
 }
 
 // AdminBackend manages the server's admin list.
@@ -224,6 +238,9 @@ func (b Backend) validate() error {
 	need("Admins.List", b.Admins.List != nil)
 	need("Admins.Add", b.Admins.Add != nil)
 	need("Admins.Remove", b.Admins.Remove != nil)
+	need("Mods.List", b.Mods.List != nil)
+	need("Mods.Add", b.Mods.Add != nil)
+	need("Mods.Remove", b.Mods.Remove != nil)
 	need("Service.Status", b.Service.Status != nil)
 	need("Service.Install", b.Service.Install != nil)
 	need("Service.Uninstall", b.Service.Uninstall != nil)

@@ -940,6 +940,70 @@ func TestDontStarveTogetherCavesAndAdmins(t *testing.T) {
 	}
 }
 
+// covers the Project Zomboid mod list end to end
+func TestModsCommands(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "zomboid", "--game", "projectzomboid", "--world-name", "base", "--admin-password", "secret"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	ini := filepath.Join(os.Getenv("GAMEHOST_HOME"), "servers", "zomboid", "data", "Server", "base.ini")
+	if err := os.MkdirAll(filepath.Dir(ini), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := "PVP=true\nWorkshopItems=\nMods=\nMaxPlayers=16\n"
+	if err := os.WriteFile(ini, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runArgs(t, "mods", "add", "zomboid", "1234567890", "--workshop"); err != nil {
+		t.Fatalf("mods add workshop: %v", err)
+	}
+	if _, err := runArgs(t, "mods", "add", "zomboid", "Hydrocraft"); err != nil {
+		t.Fatalf("mods add mod: %v", err)
+	}
+
+	out, err := runArgs(t, "mods", "list", "zomboid")
+	if err != nil {
+		t.Fatalf("mods list: %v", err)
+	}
+	for _, want := range []string{"1234567890", "Hydrocraft"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("mods list missing %q:\n%s", want, out)
+		}
+	}
+
+	data, err := os.ReadFile(ini)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	for _, want := range []string{"PVP=true", "WorkshopItems=1234567890", "Mods=Hydrocraft", "MaxPlayers=16"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("ini lacks %q:\n%s", want, got)
+		}
+	}
+
+	if _, err := runArgs(t, "mods", "remove", "zomboid", "Hydrocraft"); err != nil {
+		t.Fatalf("mods remove: %v", err)
+	}
+	data, err = os.ReadFile(ini)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "Hydrocraft") {
+		t.Errorf("mods remove left the id:\n%s", data)
+	}
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create corekeeper: %v", err)
+	}
+	if _, err := runArgs(t, "mods", "list", "corekeeper"); err == nil {
+		t.Fatal("mods list accepted Core Keeper")
+	}
+}
+
 // covers adding, listing and removing admins
 func TestAdminCommands(t *testing.T) {
 	t.Setenv("GAMEHOST_HOME", t.TempDir())

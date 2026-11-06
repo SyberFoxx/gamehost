@@ -52,6 +52,7 @@ commands:
   install   download the server files of an instance
   list      list instances
   logs      print or follow the newest log of an instance
+  mods      list, add or remove the mods of an instance
   restore   replace the world data from a backup
   serve     serve the HTTP API and web panel
   service   install or remove the systemd units of an instance
@@ -75,13 +76,20 @@ backup flags:
 
 admin subcommands:
   admin list <name>
-  admin add <name> <steamid> [--name NAME] [--limited]
-  admin remove <name> <steamid>
+  admin add <name> <id> [--name NAME] [--limited]
+  admin remove <name> <id>
+
+mods subcommands:
+  mods list <name>
+  mods add <name> <id> [--workshop]
+  mods remove <name> <id> [--workshop]
 
 config flags:
   --max-players N, --world-name NAME, --mode NAME, --port N, --password PW, --game-id ID
                                                                     (corekeeper)
   --port N, --udp-port N, --admin-password PW                        (projectzomboid)
+  --max-players N, --port N, --cluster-token TOKEN, --offline, --caves
+                                                                    (dontstarvetogether)
   --backup-every DUR, --backup-keep N    scheduled backup window, off by default
 
 serve flags:
@@ -119,6 +127,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runShow(args[1:], stdout, stderr)
 	case "config":
 		return runConfig(args[1:], stdout, stderr)
+	case "mods":
+		return runMods(args[1:], stdout, stderr)
 	case "admin":
 		return runAdmin(args[1:], stdout, stderr)
 	case "start":

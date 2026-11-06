@@ -109,6 +109,12 @@ Candidates, easiest first:
   Do not add a mutating route outside the `ServeHTTP` guard.
 - `update` also refuses a running instance and writes `backups/pre-update_<timestamp>.tar.gz` before
   SteamCMD starts; do not weaken either check to make an update convenient.
+- Project Zomboid reads `WorkshopItems=` (numeric Steam Workshop ids) and `Mods=` (folder names) from
+  the top of `Server/<name>.ini`. `mods list` works while running; add and remove need a stopped
+  server. The ini only exists after the first start, and a missing file is a clear error.
+- `game.AdminStore` and `game.ModStore` are optional driver interfaces; the CLI and the lobby assert
+  them instead of branching on the game name. Project Zomboid has no admin list yet, and only
+  Project Zomboid has a mod list.
 - `serve` binds `127.0.0.1:8080` and has no authentication; keep it on loopback and let a reverse
   proxy own access control.
 - The restore extractor rejects any tar entry that is not local to the target directory; keep that
@@ -121,8 +127,11 @@ Candidates, easiest first:
   `World.Index` slot, and archives `data/` first when it is not empty. Core Keeper saves do not
   start with the gzip magic their extension suggests; never re-add a header check.
 - `config` only edits `instance.json` for values the launch flags consume (players, mode, port,
-  password, game ID, admin password, backup window). Never write `ServerConfig.json`, the Project
-  Zomboid ini or `Admins.json` from it; the server owns those files.
+  password, game ID, admin password, cluster token, offline, caves, backup window). Never write
+  `ServerConfig.json`, `Admins.json` or the Project Zomboid ini from it; the server owns those files.
+- The one exception for the Project Zomboid ini is `mods add|remove`: it rewrites only the
+  `WorkshopItems=` and `Mods=` lines, in place, byte for byte, and only while stopped. Do not
+  generalize that write to other keys.
 - The scheduled backup is a maintenance window: stop, archive, prune, start again. `serve` can own
   the loop, or `service install` can write a systemd timer for it; never both on one instance. A
   failed archive must still restart the server, so the timer restarts in `ExecStopPost`, never in

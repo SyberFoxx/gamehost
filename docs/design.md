@@ -7,7 +7,7 @@ The project doubles as a learning vehicle: every milestone introduces a Go conce
 program needs (process control, signals, concurrency, `net/http`, tests with `-race`), instead of
 synthetic exercises.
 
-**Status:** M0–M15 implemented (`doctor`, instance model and store, `install`/`update`,
+**Status:** M0–M16 implemented (`doctor`, instance model and store, `install`/`update`,
 `start`/`status` with join information, `start --detach`, `stop`, `logs`/`logs -f`,
 `backup`/`restore`, `serve` with the HTTP API and panel, two more game drivers, `import-world`,
 the per-instance lock, `config`, API backups, scheduled backup windows, and the lobby that reaches
@@ -131,10 +131,16 @@ Primary source: [PZwiki, Dedicated server](https://pzwiki.net/wiki/Dedicated_ser
 | Files inside the cache | `Server/<name>.ini` plus `.lua` files, `Saves/Multiplayer/<name>/`, `db/`, `Logs/` |
 | Join | No game ID: players add the address and port in the Favorites tab |
 | Player limit and join password | only in `Server/<name>.ini`, no launch flag |
+| Mods | `WorkshopItems=<id>;<id>` and `Mods=<id>;<id>` at the top of `Server/<name>.ini` |
 
 The driver passes only what a flag can express: server name, both ports, cache directory and the
 admin password. Max players and the join password stay in the ini, which the server also rewrites,
 so gamehost does not fight it.
+
+The one deliberate exception to "the ini belongs to the server" is the mod list. `mods add` and
+`mods remove` rewrite only the `WorkshopItems=` and `Mods=` lines, leave every other byte in place
+and run only while the server is stopped; `mods list` reads the same two lines. A missing ini means
+the server has never started, and the command says so instead of inventing a file.
 
 ### Don't Starve Together
 
@@ -501,6 +507,7 @@ Why this shape:
 | M13 | the lobby is the whole program | every command is reachable from the lobby: create and edit an instance, install/update with live output, follow the log with a selectable tail, list/create/restore/import backups with the retention form, admins, systemd units with `dir`/`binary`/`systemctl`, `doctor` with the build version and the web panel with the backup schedule and a boot start; destructive actions confirm; `?` shows the command each key replaces | screen stack, streaming over channels, modal state, textinput, form validation at the adapter |
 | M14 | Don't Starve Together driver | a cluster creates, installs, starts offline without a token, writes `cluster.ini`/`server.ini` once, backs up and stops cleanly; an online cluster requires a Klei token and the wizard asks for it | driver-owned files behind `game.Preparer`, per-game validation, a token that stays out of the process argv |
 | M15 | Caves shard and DST admins | `--caves` starts both shards, one stop reaches both, a dying shard takes the instance down, and the lobby adds or removes `KU_...` admins in `adminlist.txt` | multi-process supervision in one process group, driver-owned admin files behind a small interface, per-game id validation |
+| M16 | Project Zomboid mods | `mods add`, `remove` and `list` edit only the two mod lines of the server ini, the lobby has a Mods screen, and every other ini line survives byte for byte | text file editing with in-place line replacement, driver-owned mod store, validation before writing |
 
 Each milestone is one work unit: code, tests and doc updates in the same commit.
 
@@ -593,6 +600,11 @@ Each milestone is one work unit: code, tests and doc updates in the same commit.
   `KillMode=mixed` keep working unchanged; the supervisor waits for both and treats a shard that
   dies unasked as a crash. A second pid file would have duplicated the lock and the state machine
   for no gain.
+- **Mods are the one ini write gamehost allows.** Project Zomboid has no flag for mods: the server
+  reads `WorkshopItems=` and `Mods=` from its ini and preserves unknown lines when it rewrites the
+  file. Rather than keep a second copy of the list in `instance.json` that the server would ignore,
+  the driver edits exactly those two lines in place, keeps every other byte and refuses to run
+  while the server is up. `game.ModStore` keeps the CLI and the lobby free of the file format.
 - **The admin list belongs to the driver.** Core Keeper writes `Admins.json` with Steam IDs and
   privileges, Don't Starve Together writes `adminlist.txt` with Klei IDs and no privileges. A small
   `game.AdminStore` keeps both behind one interface, so the CLI and the lobby never branch on the

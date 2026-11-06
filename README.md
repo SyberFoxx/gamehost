@@ -43,6 +43,7 @@ concurrency and tests with `-race`.
 | M13 | lobby as the whole program: instances, files, backups, admins, systemd, panel | done |
 | M14 | Don't Starve Together driver: online and offline clusters, cluster files, token | done |
 | M15 | Caves shard for DST, Klei admins from the terminal and the lobby | done |
+| M16 | Project Zomboid mods: workshop items and mod ids from the CLI and the lobby | done |
 
 ## Features
 
@@ -226,6 +227,7 @@ usable.
 | Logs | newest tail, then follows live; `G` returns to the live edge and `n` reloads with another tail size | `logs -f`, `logs -n` |
 | Backups | `b` archives after asking the retention, `Enter` restores, `i` imports a `.world.gzip` | `backup --keep`, `restore`, `import-world` |
 | Admins | `a` adds, `d` removes, both only while stopped | `admin add`, `admin remove` |
+| Mods | Project Zomboid only: `a` adds a mod id, `w` a workshop item, `d` removes | `mods add`, `mods remove` |
 | Systemd | `i` writes the units, `e` also enables them, `u` removes them, `a` edits `--dir`, `--binary` and `--systemctl` | `service install`, `service uninstall` |
 | Environment | every `doctor` check with its status, the build version and a verdict | `doctor`, `version` |
 | Web panel | starts the panel on `127.0.0.1:8080` with the backup schedule, `b` picks an instance to start with it, `Esc` stops it | `serve`, `serve --start` |
@@ -348,6 +350,21 @@ gamehost start corekeeper --detach
 A Steam ID64 is the 17-digit number that starts with `7656119`. `full` (privileges `2`) can use
 every admin command; `--limited` stores privileges `1`, the level the game marks as limited.
 `admin list` works while the server runs; `add` and `remove` refuse until it is stopped.
+
+Project Zomboid loads mods from its ini. Manage the two lists without editing the file:
+
+```bash
+gamehost stop zomboid
+gamehost mods add zomboid 2200148440 --workshop
+gamehost mods add zomboid Hydrocraft
+gamehost mods list zomboid
+gamehost mods remove zomboid Hydrocraft
+gamehost start zomboid --detach
+```
+
+`mods add` and `mods remove` rewrite only the `WorkshopItems=` and `Mods=` lines and leave the rest
+of the ini byte for byte; `mods list` works while the server runs. The lobby has the same screen
+under `Mods`.
 
 Don't Starve Together uses the same commands with the Klei user id that the game shows (`KU_...`).
 The driver writes one id per line to `data/gamehost/<name>/adminlist.txt`; names and limited
@@ -508,6 +525,9 @@ a command would have failed the check.
 | `gamehost admin list <name>` | print the admin list of the game |
 | `gamehost admin add <name> <id> [--name NAME] [--limited]` | grant admin rights; Steam ID or `KU_...` id (stopped only) |
 | `gamehost admin remove <name> <id>` | drop admin rights (stopped only) |
+| `gamehost mods list <name>` | print the workshop items and mod ids (Project Zomboid) |
+| `gamehost mods add <name> <id> [--workshop]` | add a mod id or workshop item (stopped only) |
+| `gamehost mods remove <name> <id> [--workshop]` | drop a mod id or workshop item (stopped only) |
 | `gamehost serve [--addr]` | serve the HTTP API and web panel (default `127.0.0.1:8080`) |
 | `gamehost serve --start <name>` | start that instance when the daemon boots; repeatable |
 | `gamehost service install <name> [--enable]` | write the systemd user units, optionally enabling and starting them |
@@ -680,6 +700,9 @@ make fmt     # gofmt -l -w .
 The full design, the verified Core Keeper launch contract and the decision log live in
 [docs/design.md](docs/design.md). Working conventions for agents and contributors live in
 [AGENTS.md](AGENTS.md).
+
+A complete user manual in Spanish, from installing the binary to opening the TUI and administering
+every game, lives in [docs/manual.md](docs/manual.md).
 
 ## Design decisions
 

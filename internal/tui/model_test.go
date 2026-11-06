@@ -184,6 +184,20 @@ func (f *fake) backend() Backend {
 				return closedStream(Event{Line: "updating", Done: true})
 			},
 		},
+		Mods: ModsBackend{
+			List: func(name string) (Mods, error) {
+				f.record("mods " + name)
+				return Mods{}, f.err
+			},
+			Add: func(name, id string, workshop bool) (string, error) {
+				f.record("mod add " + name + " " + id)
+				return "added", f.err
+			},
+			Remove: func(name, id string, workshop bool) (string, error) {
+				f.record("mod remove " + name + " " + id)
+				return "removed", f.err
+			},
+		},
 		Admins: AdminBackend{
 			List: func(name string) ([]Admin, error) {
 				f.record("admins " + name)

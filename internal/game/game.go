@@ -51,6 +51,20 @@ type AdminStore interface {
 	RemoveAdmin(inst instance.Instance, id string) error
 }
 
+// Mods is the mod configuration a server reads at startup.
+// Workshop lists Steam Workshop ids; Enabled lists the mod ids to load.
+type Mods struct {
+	Workshop []string
+	Enabled  []string
+}
+
+// ModStore reads and writes the mod list a server owns. Only games whose
+// server reads mods from a file implement it.
+type ModStore interface {
+	Mods(inst instance.Instance) (Mods, error)
+	SaveMods(inst instance.Instance, mods Mods) error
+}
+
 // Registration pairs a game with its driver.
 type Registration struct {
 	Game      string
