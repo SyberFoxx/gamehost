@@ -53,5 +53,8 @@ checked against a real anonymous install of app `343050` (build `762172`, 4.4 GB
   `dst  dontstarvetogether  4  offline:10999  Prueba DST`.
 - **D6** — `gofmt -l .`, `go vet ./...` and `go test -race ./...` clean; the new driver and model
   have table-driven tests for args, file creation, idempotence, token permissions and validation.
-- **D7** — Not verified here: an online cluster, because it needs a Klei token from the player's
-  account. The code path is the same except for `cluster_token.txt` and the absence of `-offline`.
+- **D7** — Online cluster verified with the player's Klei token, in a throwaway data root: the log
+  showed `Token retrieved from: .../cluster_token.txt`, `Received (KU_...) from TokenPurpose`,
+  `Telling Client our new session identifier: E55C3FFDD251D8A7` and
+  `Server registered via geo DNS in us-east-1`; the token file was `0600`. The throwaway root and
+  the token file were deleted afterwards, and the token never entered this repository.

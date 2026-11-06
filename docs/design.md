@@ -163,7 +163,9 @@ What the real run confirmed: the server generated a world (`World generated on b
 printed `Telling Client our new session identifier: D8835938996F494F`, wrote the save under
 `<cluster>/Master/save/`, appended `[ACCOUNT] encode_user_path = true` to `server.ini` without
 touching the rest, and stopped cleanly on `SIGTERM` with exit 0. A `backup` of that data directory
-was 1.1 MB for 6.3 MB of files.
+was 1.1 MB for 6.3 MB of files. An online cluster with a real Klei token logged
+`Token retrieved from: .../cluster_token.txt`, a new session id and
+`Server registered via geo DNS in us-east-1`, so registration works without extra flags.
 
 `gamehost` owns only what the flags and a missing file need: it creates `cluster.ini` and
 `server.ini` when they do not exist and refreshes `cluster_token.txt` (mode `0600`) for an online
