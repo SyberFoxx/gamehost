@@ -354,6 +354,7 @@ func TestCreateFormHidesFieldsPerGame(t *testing.T) {
 	f := &fake{games: []GameChoice{
 		{Name: gameCoreKeeper, Label: "Core Keeper"},
 		{Name: gameProjectZomboid, Label: "Project Zomboid"},
+		{Name: gameDontStarveTogether, Label: "Don't Starve Together"},
 	}}
 	form := newCreateForm(context.Background(), f.backend()).(*form)
 
@@ -379,6 +380,29 @@ func TestCreateFormHidesFieldsPerGame(t *testing.T) {
 	}
 	if form.values()["game"] != gameProjectZomboid {
 		t.Fatalf("game value = %q", form.values()["game"])
+	}
+
+	// Project Zomboid is the second game; once more reaches Don't Starve Together.
+	form.adjust(1)
+	if form.values()["game"] != gameDontStarveTogether {
+		t.Fatalf("game value = %q", form.values()["game"])
+	}
+	if visible()["seed"] || visible()["password"] || visible()["udp"] || !visible()["network"] {
+		t.Fatalf("Don't Starve Together fields are wrong: %v", visible())
+	}
+	if !visible()["cluster-token"] {
+		t.Fatalf("an online cluster must ask for its token: %v", visible())
+	}
+
+	// The token is only read by an online cluster, so the field disappears
+	// when the choice moves to offline instead of staying visible and unused.
+	form.cursor = indexOf(t, form.fields, "network")
+	form.adjust(1)
+	if form.values()["network"] != instanceNetworkOffline {
+		t.Fatalf("network value = %q", form.values()["network"])
+	}
+	if visible()["cluster-token"] {
+		t.Fatalf("an offline cluster still shows the token field: %v", visible())
 	}
 }
 

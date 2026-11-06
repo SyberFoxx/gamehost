@@ -8,8 +8,9 @@
 
 [![CI](https://github.com/SyberFoxx/gamehost/actions/workflows/ci.yml/badge.svg)](https://github.com/SyberFoxx/gamehost/actions/workflows/ci.yml)
 
-Terminal-first manager for dedicated game servers, written in Go. The first supported game is
-**Core Keeper**: install, configure, run, inspect and back up a server for a small friend group.
+Terminal-first manager for dedicated game servers, written in Go. Supported games are
+**Core Keeper**, **Project Zomboid** and **Don't Starve Together**: install, configure, run,
+inspect and back up a server for a small friend group.
 
 The project is also a structured Go learning path. Every milestone adds one real capability and the
 language features it requires: `os/exec`, process groups, signals, atomic writes, `net/http`,
@@ -56,7 +57,8 @@ concurrency and tests with `-race`.
   previous data as a pre-restore backup.
 - Serves a small web panel and a JSON API with live status, start/stop controls and an SSE log
   stream, embedding the page in the binary.
-- Runs two games behind one driver interface: Core Keeper and Project Zomboid.
+- Runs three games behind one driver interface: Core Keeper, Project Zomboid and Don't Starve
+  Together (online with a Klei token, or LAN-only offline).
 - Imports an existing `.world.gzip` save into an instance, archiving the current world first.
 - Holds a per-instance lock, so two servers or a backup and a start can never share one world.
 - Keeps the newest ten run logs and prunes the rest.
@@ -277,6 +279,22 @@ gamehost config corekeeper                     # print what the launcher will us
 gamehost config corekeeper --max-players 5 --backup-every 24h
 ```
 
+Don't Starve Together needs a cluster token to be listed publicly; without one, run the cluster on
+the LAN:
+
+```bash
+gamehost create cave --game dontstarvetogether --offline --max-players 4 --world-name "Night Owls"
+gamehost install cave
+gamehost start cave --detach
+
+# online, with the token from https://accounts.klei.com
+gamehost create online --game dontstarvetogether --cluster-token 'pds-g^KU_...'
+```
+
+The cluster files are created under `data/gamehost/<name>/` (`cluster.ini`, `Master/server.ini` and,
+when online, `cluster_token.txt` with mode `0600`), and the driver creates them only when they are
+missing: after the first start, `cluster.ini` belongs to you and the server.
+
 It refuses while the server runs, because the server reads these values at launch. The world index
 is fixed after creation; `--world-name` only changes the label players see, not the save. The seed
 matters while a world is generated, so changing it on an existing save does nothing. For Project
@@ -419,6 +437,11 @@ gamehost start zomboid --detach
 Project Zomboid has no join code: `status` reports the UDP port to add in the Favorites tab, and
 max players and the join password stay in `data/Server/base.ini`.
 
+Don't Starve Together uses the same commands; `--offline` runs a LAN cluster without a Klei token,
+while an online cluster takes `--cluster-token`. `status` reports the `cluster_name` players see in
+the server browser, and gamehost writes `cluster.ini`/`Master/server.ini` under
+`data/gamehost/<name>/` the first time.
+
 ## Verifying a real Core Keeper server
 
 The test suite stops at the SteamCMD download. Once per machine, walk the whole path:
@@ -487,16 +510,18 @@ a command would have failed the check.
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--game` | `corekeeper` | `corekeeper` or `projectzomboid` |
-| `--max-players` | `8` | player limit, 1–8 (Core Keeper only) |
-| `--world-name` | per game | world name, or the Project Zomboid server name (lowercase letters, digits, `-` and `_`) |
+| `--game` | `corekeeper` | `corekeeper`, `projectzomboid` or `dontstarvetogether` |
+| `--max-players` | `8` | player limit, 1–8 (Core Keeper) or 1–64 (Don't Starve Together) |
+| `--world-name` | per game | world name, Project Zomboid server name (lowercase letters, digits, `-` and `_`) or DST `cluster_name` |
 | `--seed` | random | world seed, only used on first creation (Core Keeper only) |
 | `--mode` | `normal` | `normal`, `hard`, `creative` or `casual` (Core Keeper only) |
-| `--port` | `0` | direct-connect port; `0` keeps the Steam relay (Core Keeper) or uses `16261` (Project Zomboid) |
+| `--port` | `0` | direct-connect port; `0` keeps the Steam relay (Core Keeper), uses `16261` (Project Zomboid) or `10999` (Don't Starve Together) |
 | `--udp-port` | game port + 1 | Project Zomboid direct port (Project Zomboid only) |
 | `--password` | none | join password, at most 28 characters (Core Keeper only) |
 | `--admin-password` | required | Project Zomboid admin password (Project Zomboid only) |
 | `--game-id` | generated | fixed game ID, 15–28 characters without `Y y x 0 O` (Core Keeper only) |
+| `--cluster-token` | none | Klei token from `accounts.klei.com` (Don't Starve Together online only) |
+| `--offline` | `false` | LAN-only cluster without a Klei token (Don't Starve Together only) |
 | `--backup-every` | off | scheduled backup interval such as `24h`; needs `gamehost serve` running |
 | `--backup-keep` | `5` | scheduled archives to keep, oldest removed first |
 
@@ -562,6 +587,7 @@ graph TD
 | `internal/games` | game name to driver registry |
 | `internal/corekeeper` | Core Keeper launch arguments and join information |
 | `internal/projectzomboid` | Project Zomboid install, launch and join information |
+| `internal/dontstarvetogether` | Don't Starve Together install, cluster files, launch and join information |
 | `internal/steamcmd` | locating and running SteamCMD |
 | `internal/doctor` | environment probes |
 | `internal/httpapi` | JSON API, SSE log stream and embedded panel |
@@ -621,6 +647,8 @@ The repository never contains generated data.
 | Assert dump after `stop` during startup | the world is still generating | wait for `Started session` in `gamehost logs -f` before stopping |
 | Friends cannot join a Project Zomboid server | ports `16261` and `16262` stay UDP | forward both, and allow them in the firewall |
 | `start-server.sh: Permission denied` | SteamCMD kept the script without the execute bit | `chmod +x files/start-server.sh` |
+| Don't Starve Together exits `127` with `libcurl-gnutls.so.4` | Fedora and Nobara ship only the OpenSSL curl | provide the gnutls soname on the loader path, or use a distribution that packages it |
+| Don't Starve Together refuses to start an offline cluster | its UDP port must be 10998–11018 | `gamehost config <name> --port 10999` |
 | `backup`, `restore` or `update` refuses to run | the server holds the world files | `gamehost stop <name>` first |
 | `instance is already running` or `instance is in use by another gamehost command` | the server, or a command between its check and its state write, holds `run.lock` | wait for it, or `gamehost stop <name>` if a server was left behind |
 | A scheduled backup never runs | `serve` is not running, or the interval has not elapsed since the newest archive | keep `gamehost serve` running and watch its output |

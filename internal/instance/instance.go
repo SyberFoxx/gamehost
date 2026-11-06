@@ -11,14 +11,17 @@ import (
 
 // Supported games.
 const (
-	GameCoreKeeper     = "corekeeper"
-	GameProjectZomboid = "projectzomboid"
+	GameCoreKeeper         = "corekeeper"
+	GameProjectZomboid     = "projectzomboid"
+	GameDontStarveTogether = "dontstarvetogether"
 )
 
 // Network modes, matching the dedicated server behaviour.
 const (
-	NetworkSDR    = "sdr"
-	NetworkDirect = "direct"
+	NetworkSDR     = "sdr"
+	NetworkDirect  = "direct"
+	NetworkOnline  = "online"
+	NetworkOffline = "offline"
 )
 
 const (
@@ -28,6 +31,16 @@ const (
 	maxGameIDLen       = 28
 	maxPasswordLen     = 28
 	projectZomboidPort = 16261
+
+	// DontStarveTogetherMaxPlayers is the largest lobby the server accepts.
+	DontStarveTogetherMaxPlayers = 64
+	// DontStarveTogetherPort is the default UDP port of a cluster.
+	DontStarveTogetherPort = 10999
+	// An offline cluster is LAN only and refuses to leave this range.
+	dstLanMinPort      = 10998
+	dstLanMaxPort      = 11018
+	maxClusterNameLen  = 64
+	maxClusterTokenLen = 512
 )
 
 // DefaultBackupKeep is how many scheduled archives an instance keeps.
@@ -133,7 +146,10 @@ type Instance struct {
 	MaxPlayers    int     `json:"max_players"`
 	GameID        string  `json:"game_id"`
 	AdminPassword string  `json:"admin_password,omitempty"`
-	Backup        Backup  `json:"backup"`
+	// ClusterToken authorises an online Don't Starve Together cluster; the
+	// driver writes it to cluster_token.txt before the launch.
+	ClusterToken string `json:"cluster_token,omitempty"`
+	Backup       Backup `json:"backup"`
 }
 
 // Options carries the user-facing settings of a new instance.
@@ -148,6 +164,8 @@ type Options struct {
 	Password      string
 	AdminPassword string
 	GameID        string
+	ClusterToken  string
+	Offline       bool
 	BackupEvery   string
 	BackupKeep    int
 	InstallDir    string
@@ -181,6 +199,16 @@ func New(name string, opts Options) (Instance, error) {
 		if network.UDPPort == 0 && network.Port < 65535 {
 			network.UDPPort = network.Port + 1
 		}
+	case GameDontStarveTogether:
+		// A DST cluster is either listed by Klei or LAN only; both listen on UDP.
+		network.Mode = NetworkOnline
+		if opts.Offline {
+			network.Mode = NetworkOffline
+		}
+		network.Port = opts.Port
+		if network.Port == 0 {
+			network.Port = DontStarveTogetherPort
+		}
 	}
 
 	world := World{
@@ -190,8 +218,11 @@ func New(name string, opts Options) (Instance, error) {
 	}
 	if world.Name == "" {
 		world.Name = "Core Keeper Server"
-		if game == GameProjectZomboid {
+		switch game {
+		case GameProjectZomboid:
 			world.Name = "servertest"
+		case GameDontStarveTogether:
+			world.Name = "Don't Starve Together"
 		}
 	}
 
@@ -210,6 +241,7 @@ func New(name string, opts Options) (Instance, error) {
 		MaxPlayers:    opts.MaxPlayers,
 		GameID:        opts.GameID,
 		AdminPassword: opts.AdminPassword,
+		ClusterToken:  opts.ClusterToken,
 		Backup:        backup,
 	}
 	if err := inst.Validate(); err != nil {
@@ -247,6 +279,8 @@ func (i Instance) Validate() error {
 		return i.validateCoreKeeper()
 	case GameProjectZomboid:
 		return i.validateProjectZomboid()
+	case GameDontStarveTogether:
+		return i.validateDontStarveTogether()
 	default:
 		return fmt.Errorf("unsupported game %q: %w", i.Game, ErrInvalid)
 	}
@@ -316,6 +350,85 @@ func (i Instance) validateProjectZomboid() error {
 	}
 	if i.Network.UDPPort == i.Network.Port {
 		return fmt.Errorf("game and direct ports must differ (both %d): %w", i.Network.Port, ErrInvalid)
+	}
+	return nil
+}
+
+// validateDontStarveTogether checks the launch contract of a DST cluster.
+func (i Instance) validateDontStarveTogether() error {
+	if i.World.Index != 0 || i.World.Seed != "" || i.World.Mode != "" {
+		return fmt.Errorf("world index, seed and mode belong to core keeper: %w", ErrInvalid)
+	}
+	if err := validateClusterName(i.World.Name); err != nil {
+		return err
+	}
+	if i.MaxPlayers < 1 || i.MaxPlayers > DontStarveTogetherMaxPlayers {
+		return fmt.Errorf("max players %d must be between 1 and %d: %w", i.MaxPlayers, DontStarveTogetherMaxPlayers, ErrInvalid)
+	}
+	if i.GameID != "" {
+		return fmt.Errorf("game id belongs to core keeper: %w", ErrInvalid)
+	}
+	if i.AdminPassword != "" {
+		return fmt.Errorf("admin password is only used by project zomboid: %w", ErrInvalid)
+	}
+	// The join password lives in cluster.ini, which the server owns.
+	if i.Network.Password != "" {
+		return fmt.Errorf("the cluster password is configured in cluster.ini, not by gamehost: %w", ErrInvalid)
+	}
+	if i.Network.UDPPort != 0 {
+		return fmt.Errorf("udp port %d is only used by project zomboid: %w", i.Network.UDPPort, ErrInvalid)
+	}
+
+	switch i.Network.Mode {
+	case NetworkOnline:
+		if err := validateClusterToken(i.ClusterToken); err != nil {
+			return err
+		}
+	case NetworkOffline:
+		// The server refuses an offline cluster outside its LAN port range.
+		if i.Network.Port < dstLanMinPort || i.Network.Port > dstLanMaxPort {
+			return fmt.Errorf("offline cluster port %d must be between %d and %d: %w", i.Network.Port, dstLanMinPort, dstLanMaxPort, ErrInvalid)
+		}
+	default:
+		return fmt.Errorf("unknown network mode %q (want %q or %q): %w", i.Network.Mode, NetworkOnline, NetworkOffline, ErrInvalid)
+	}
+	if i.Network.Port < 1 || i.Network.Port > 65535 {
+		return fmt.Errorf("game port %d must be between 1 and 65535: %w", i.Network.Port, ErrInvalid)
+	}
+	return nil
+}
+
+// validateClusterName keeps the name safe to write into cluster.ini.
+func validateClusterName(name string) error {
+	switch {
+	case name == "":
+		return fmt.Errorf("cluster name is empty: %w", ErrInvalid)
+	case len([]rune(name)) > maxClusterNameLen:
+		return fmt.Errorf("cluster name is longer than %d characters: %w", maxClusterNameLen, ErrInvalid)
+	}
+	for _, r := range name {
+		if r < ' ' || r == 0x7f || strings.ContainsRune(`=[]`+"\n\r", r) {
+			return fmt.Errorf("cluster name %q must not contain control characters, =, [ or ]: %w", name, ErrInvalid)
+		}
+	}
+	return nil
+}
+
+// validateClusterToken rejects a token that cannot come from Klei's site.
+func validateClusterToken(token string) error {
+	if token == "" {
+		return fmt.Errorf("an online cluster needs a Klei cluster token: %w", ErrInvalid)
+	}
+	if token != strings.TrimSpace(token) {
+		return fmt.Errorf("cluster token must not start or end with whitespace: %w", ErrInvalid)
+	}
+	if len(token) > maxClusterTokenLen {
+		return fmt.Errorf("cluster token is longer than %d characters: %w", maxClusterTokenLen, ErrInvalid)
+	}
+	for _, r := range token {
+		if r <= ' ' || r == 0x7f {
+			return fmt.Errorf("cluster token must not contain spaces or control characters: %w", ErrInvalid)
+		}
 	}
 	return nil
 }

@@ -65,6 +65,8 @@ type Settings struct {
 	Password      string
 	AdminPassword string
 	GameID        string
+	Network       string
+	ClusterToken  string
 	BackupEvery   string
 	BackupKeep    string
 }

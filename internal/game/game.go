@@ -17,6 +17,13 @@ type Installer interface {
 	ServerPath(installDir string) string
 }
 
+// Preparer writes the configuration files a server reads at startup.
+// The launch calls it before the process starts, so a driver that keeps its
+// settings in files of its own owns the write instead of the CLI.
+type Preparer interface {
+	Prepare(inst instance.Instance) error
+}
+
 // Runner turns an instance into a launch and reports how players join it.
 type Runner interface {
 	Launch(inst instance.Instance) (Launch, error)

@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"text/tabwriter"
 
@@ -13,8 +14,8 @@ import (
 // runCreate writes a new instance configuration.
 func runCreate(args []string, stdout, stderr io.Writer) error {
 	fs := newFlagSet("create", stderr)
-	gameName := fs.String("game", instance.GameCoreKeeper, "game: corekeeper or projectzomboid")
-	maxPlayers := fs.Int("max-players", 8, "maximum players, 1-8 (corekeeper only)")
+	gameName := fs.String("game", instance.GameCoreKeeper, "game: corekeeper, projectzomboid or dontstarvetogether")
+	maxPlayers := fs.Int("max-players", 8, "maximum players, 1-8 for core keeper and 1-64 for don't starve together")
 	worldName := fs.String("world-name", "", "world or server name shown to players")
 	seed := fs.String("seed", "", "world seed, empty means random (corekeeper only)")
 	mode := fs.String("mode", "normal", "world mode: normal, hard, creative or casual (corekeeper only)")
@@ -23,6 +24,8 @@ func runCreate(args []string, stdout, stderr io.Writer) error {
 	password := fs.String("password", "", "join password, at most 28 characters (corekeeper only)")
 	adminPassword := fs.String("admin-password", "", "admin password (projectzomboid only)")
 	gameID := fs.String("game-id", "", "fixed game ID, 15-28 alphanumeric characters (corekeeper only)")
+	clusterToken := fs.String("cluster-token", "", "Klei cluster token (dontstarvetogether online only)")
+	offline := fs.Bool("offline", false, "LAN-only cluster without a Klei token (dontstarvetogether only)")
 	backupEvery := fs.String("backup-every", "", "scheduled backup interval such as 24h; off by default")
 	backupKeep := fs.Int("backup-keep", 0, "scheduled archives to keep (default 5)")
 	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
@@ -68,6 +71,11 @@ func runCreate(args []string, stdout, stderr io.Writer) error {
 		opts.Port = *port
 		opts.UDPPort = *udpPort
 		opts.AdminPassword = *adminPassword
+	case instance.GameDontStarveTogether:
+		opts.MaxPlayers = *maxPlayers
+		opts.Port = *port
+		opts.ClusterToken = *clusterToken
+		opts.Offline = *offline
 	default:
 		return fmt.Errorf("create: unknown game %q: %w", *gameName, ErrUsage)
 	}
@@ -117,18 +125,26 @@ func applySettings(s *store.Store, inst instance.Instance, opts instance.Options
 	return updated, nil
 }
 
-// rejectForeignFlags refuses flags that belong to the other game.
+// flagGames maps an option to the games that consume it.
+var flagGames = map[string][]string{
+	"max-players":    {instance.GameCoreKeeper, instance.GameDontStarveTogether},
+	"seed":           {instance.GameCoreKeeper},
+	"mode":           {instance.GameCoreKeeper},
+	"password":       {instance.GameCoreKeeper},
+	"game-id":        {instance.GameCoreKeeper},
+	"udp-port":       {instance.GameProjectZomboid},
+	"admin-password": {instance.GameProjectZomboid},
+	"cluster-token":  {instance.GameDontStarveTogether},
+	"offline":        {instance.GameDontStarveTogether},
+}
+
+// rejectForeignFlags refuses flags that belong to another game.
 func rejectForeignFlags(verb, game string, set map[string]bool) error {
-	foreign := []string{"udp-port", "admin-password"}
-	owner := instance.GameProjectZomboid
-	if game == instance.GameProjectZomboid {
-		foreign = []string{"max-players", "seed", "mode", "password", "game-id"}
-		owner = instance.GameCoreKeeper
-	}
-	for _, name := range foreign {
-		if set[name] {
-			return fmt.Errorf("%s: --%s is only used by %s: %w", verb, name, owner, ErrUsage)
+	for name, owners := range flagGames {
+		if !set[name] || slices.Contains(owners, game) {
+			continue
 		}
+		return fmt.Errorf("%s: --%s is only used by %s: %w", verb, name, owners[0], ErrUsage)
 	}
 	return nil
 }
@@ -156,6 +172,8 @@ func optionsOf(inst instance.Instance) instance.Options {
 		Password:      inst.Network.Password,
 		AdminPassword: inst.AdminPassword,
 		GameID:        inst.GameID,
+		ClusterToken:  inst.ClusterToken,
+		Offline:       inst.Network.Mode == instance.NetworkOffline,
 		BackupEvery:   inst.Backup.Every,
 		BackupKeep:    inst.Backup.Keep,
 		InstallDir:    inst.InstallDir,
@@ -240,6 +258,8 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	gameID := fs.String("game-id", "", "fixed game ID, empty generates one on the next start (corekeeper only)")
 	backupEvery := fs.String("backup-every", "", "scheduled backup interval such as 24h; off disables it")
 	backupKeep := fs.Int("backup-keep", 0, "scheduled archives to keep")
+	clusterToken := fs.String("cluster-token", "", "Klei cluster token, empty clears it (dontstarvetogether only)")
+	offline := fs.Bool("offline", false, "run the cluster on the LAN without a Klei token (dontstarvetogether only)")
 	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
 		return usageError(err)
 	}
@@ -302,6 +322,22 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		if set["admin-password"] {
 			opts.AdminPassword = *adminPassword
 		}
+	case instance.GameDontStarveTogether:
+		if set["max-players"] {
+			opts.MaxPlayers = *maxPlayers
+		}
+		if set["world-name"] {
+			opts.WorldName = *worldName
+		}
+		if set["port"] {
+			opts.Port = *port
+		}
+		if set["cluster-token"] {
+			opts.ClusterToken = *clusterToken
+		}
+		if set["offline"] {
+			opts.Offline = *offline
+		}
 	}
 	if set["backup-every"] {
 		every, err := parseBackupEvery(*backupEvery)
@@ -342,6 +378,17 @@ func instanceRows(inst instance.Instance) [][2]string {
 			[2]string{"direct port", fmt.Sprint(inst.Network.UDPPort)},
 			[2]string{"admin password", orDefault(inst.AdminPassword, "(none)")},
 			[2]string{"max players", "from the server ini"},
+			[2]string{"scheduled backup", backupSummary(inst.Backup)},
+		)
+	}
+	if inst.Game == instance.GameDontStarveTogether {
+		token := "(none)"
+		if inst.ClusterToken != "" {
+			token = "(set)"
+		}
+		return append(rows,
+			[2]string{"max players", fmt.Sprint(inst.MaxPlayers)},
+			[2]string{"cluster token", token},
 			[2]string{"scheduled backup", backupSummary(inst.Backup)},
 		)
 	}

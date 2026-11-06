@@ -78,6 +78,12 @@ func prepareStart(s *store.Store, inst instance.Instance) (game.Launch, string, 
 		return game.Launch{}, "", fmt.Errorf("start instance %q: server is not installed, run: gamehost install %s: %w", inst.Name, inst.Name, err)
 	}
 
+	// A driver that keeps its settings in files of its own writes them here,
+	// before the launch, so the server never reads a stale cluster.
+	if err := prepareRuntime(driver, inst); err != nil {
+		return game.Launch{}, "", err
+	}
+
 	// Validate the launch contract before a process exists.
 	launch, err := driver.Runner.Launch(inst)
 	if err != nil {
@@ -85,6 +91,18 @@ func prepareStart(s *store.Store, inst instance.Instance) (game.Launch, string, 
 	}
 	logPath := filepath.Join(s.Layout(inst.Name).Logs, time.Now().Format("2006-01-02_15-04-05")+".log")
 	return launch, logPath, nil
+}
+
+// prepareRuntime lets a driver write the files its server reads at startup.
+func prepareRuntime(driver game.Registration, inst instance.Instance) error {
+	preparer, ok := driver.Runner.(game.Preparer)
+	if !ok {
+		return nil
+	}
+	if err := preparer.Prepare(inst); err != nil {
+		return fmt.Errorf("start instance %q: %w", inst.Name, err)
+	}
+	return nil
 }
 
 // startDetached re-executes gamehost as a supervisor in a new session.
@@ -238,6 +256,11 @@ func runSupervise(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	}
 	driver, err := games.Lookup(inst.Game)
 	if err != nil {
+		return err
+	}
+	// The parent prepared the cluster before re-execing, but the hidden command
+	// must also stand on its own when it is the entry point.
+	if err := prepareRuntime(driver, inst); err != nil {
 		return err
 	}
 	launch, err := driver.Runner.Launch(inst)

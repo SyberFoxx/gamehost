@@ -3,7 +3,8 @@
 ## Context
 
 `gamehost` is a terminal-first manager for dedicated game servers, written in Go 1.26.
-Supported games: Core Keeper (Steam app `1963720`) and Project Zomboid (Steam app `380870`).
+Supported games: Core Keeper (`1963720`), Project Zomboid (`380870`) and Don't Starve Together
+(`343050`).
 Module path: `github.com/syberfoxx/gamehost`.
 Entry point: `cmd/gamehost`. Design and roadmap: `docs/design.md`.
 
@@ -42,7 +43,11 @@ Entry point: `cmd/gamehost`. Design and roadmap: `docs/design.md`.
 
 ## Games and drivers
 
-Supported today: Core Keeper (Steam app `1963720`) and Project Zomboid (`380870`).
+Supported today: Core Keeper (`1963720`), Project Zomboid (`380870`) and Don't Starve Together
+(`343050`). The Don't Starve Together driver creates `cluster.ini`, `Master/server.ini` and, for an
+online cluster, `cluster_token.txt` (mode `0600`) before the launch through `game.Preparer`; it
+writes the ini files only when they are missing, because the server appends its own sections and
+the player owns the rest.
 A game is one driver package plus one entry in `internal/games`; verify its contract in the official
 documentation and record the facts in `docs/design.md` before writing flags.
 
@@ -53,7 +58,6 @@ Candidates, easiest first:
 | Terraria (`105600`) | SteamCMD anonymous (verify) | `-world`, `-worldname`, `-autocreate`, `-port`, `-maxplayers`, `-password`; the first start creates the world; join by IP:7777 |
 | Valheim (`896660`) | SteamCMD anonymous | `valheim_server.x86_64` with `-name -port -world -password -public`; needs `SteamAppId=892970` and `steamclient.so`; also needs `Env` in `game.Launch` |
 | Palworld (`2394010`) | SteamCMD anonymous plus app `1007` libs | `PalServer.sh`, `PalWorldSettings.ini`, 8211 UDP plus the 27015 query port; memory hungry |
-| Don't Starve Together (`343050`) | SteamCMD anonymous | requires a cluster token up front and `cluster.ini`; the token breaks a one-shot `create` |
 | tModLoader (`1281930`) | SteamCMD anonymous | Terraria with mods: same flags plus the mod loader |
 | Minecraft Java | not on Steam: Mojang or Paper jar, EULA, Java runtime | needs a general install strategy instead of SteamCMD args, `server.properties`, RCON |
 | Factorio (`427520`) | authenticated SteamCMD login, or the headless tarball from factorio.com | `factorio --start-server`, `server-settings.json`; anonymous SteamCMD does not work, so the installer needs a login or tarball path |
@@ -141,6 +145,18 @@ Candidates, easiest first:
 - Project Zomboid has no game ID: players join by address and UDP port (`16261`, direct `16262`).
 - The `start-server.sh` script ships from SteamCMD; if it loses the execute bit, `start` fails with
   `permission denied` until it is `chmod +x`.
+- Don't Starve Together is Steam app `343050`; `bin64/dontstarve_dedicated_server_nullrenderer_x64`
+  must run with `bin64` as working directory. `-persistent_storage_root <data>`, `-conf_dir gamehost`
+  and `-cluster <instance>` put the cluster at `data/gamehost/<instance>/`.
+- An online DST cluster needs a Klei token from `accounts.klei.com`; an offline cluster
+  (`offline_cluster = true` plus `-offline`) needs no token but its UDP port must be 10998–11018.
+  `-players` and `-port` override `cluster.ini` and `server.ini`, so gamehost passes both.
+- The DST server appends sections such as `[ACCOUNT] encode_user_path = true` to `server.ini`;
+  never rewrite that file, and never treat the appended line as drift.
+- The DST binary needs `libcurl-gnutls.so.4`, which Fedora and Nobara do not package; the server
+  exits 127 with `error while loading shared libraries` until it is on the loader path.
+- DST has no game ID: the cluster is found in the server browser by its `cluster_name`, or by
+  address and UDP port.
 - The lobby only opens when stdin and stdout are terminals, and the gate lives in `app.Run` so
   `main` stays a dispatcher. Do not move it into `main`, and keep the stdin check: a redirected
   stdin would otherwise open an invisible UI. The lobby is the front end of every command, but the

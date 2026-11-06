@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/syberfoxx/gamehost/internal/corekeeper"
+	"github.com/syberfoxx/gamehost/internal/dontstarvetogether"
 	"github.com/syberfoxx/gamehost/internal/game"
 	"github.com/syberfoxx/gamehost/internal/instance"
 	"github.com/syberfoxx/gamehost/internal/projectzomboid"
@@ -28,6 +29,12 @@ func All() []game.Registration {
 			Label:     "Project Zomboid",
 			Installer: projectzomboid.Installer{},
 			Runner:    projectzomboid.Runner{},
+		},
+		{
+			Game:      instance.GameDontStarveTogether,
+			Label:     "Don't Starve Together",
+			Installer: dontstarvetogether.Installer{},
+			Runner:    dontstarvetogether.Runner{},
 		},
 	}
 }
