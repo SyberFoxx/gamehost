@@ -89,10 +89,15 @@ type fake struct {
 	service  ServiceStatus
 	games    []GameChoice
 
-	follow <-chan Event
+	follow      <-chan Event
+	followAt    int
+	backupKeep  int
+	serviceOpts ServiceOptions
+	version     string
 
 	panelAddr string
 	panelStop func()
+	panelBoot string
 
 	calls  []string
 	err    error
@@ -144,7 +149,8 @@ func (f *fake) backend() Backend {
 				f.record("stop " + name)
 				return "stopped " + name, f.err
 			},
-			Backup: func(_ context.Context, name string) (string, error) {
+			Backup: func(_ context.Context, name string, keep int) (string, error) {
+				f.backupKeep = keep
 				f.record("backup " + name)
 				return "backed up " + name, f.err
 			},
@@ -162,7 +168,8 @@ func (f *fake) backend() Backend {
 			},
 		},
 		Logs: LogBackend{
-			Follow: func(_ context.Context, name string, _ int) <-chan Event {
+			Follow: func(_ context.Context, name string, lines int) <-chan Event {
+				f.followAt = lines
 				f.record("follow " + name)
 				return f.follow
 			},
@@ -199,11 +206,13 @@ func (f *fake) backend() Backend {
 				f.record("service status " + name)
 				return f.service, f.err
 			},
-			Install: func(name string, _ bool) (string, error) {
+			Install: func(name string, _ bool, opts ServiceOptions) (string, error) {
+				f.serviceOpts = opts
 				f.record("service install " + name)
 				return "installed", f.err
 			},
-			Uninstall: func(name string) (string, error) {
+			Uninstall: func(name string, opts ServiceOptions) (string, error) {
+				f.serviceOpts = opts
 				f.record("service uninstall " + name)
 				return "uninstalled", f.err
 			},
@@ -213,10 +222,12 @@ func (f *fake) backend() Backend {
 				f.record("doctor")
 				return f.report, f.err
 			},
-			Games: func() []GameChoice { return f.games },
+			Games:   func() []GameChoice { return f.games },
+			Version: func() string { return f.version },
 		},
 		Panel: PanelBackend{
-			Start: func(_ context.Context, _ string) (string, func(), error) {
+			Start: func(_ context.Context, _, start string) (string, func(), error) {
+				f.panelBoot = start
 				f.record("panel")
 				return f.panelAddr, f.panelStop, f.err
 			},
@@ -705,7 +716,7 @@ func TestPanelStartsAndStops(t *testing.T) {
 		panelAddr: "127.0.0.1:8080",
 		panelStop: func() { stopped = true },
 	}
-	p := newPanel(context.Background(), f.backend().Panel).(*panel)
+	p := newPanel(context.Background(), f.backend().Panel, nil).(*panel)
 
 	cmd := p.start()
 	p, _ = applyTo(t, p, cmd)
@@ -719,6 +730,107 @@ func TestPanelStartsAndStops(t *testing.T) {
 	}
 	if _, ok := drain(t, cmd)[0].(popMsg); !ok {
 		t.Fatalf("esc did not leave the panel")
+	}
+}
+
+// covers the tail editor: reloading the follower with the size typed
+func TestLogsTailEditorReloadsTheFollower(t *testing.T) {
+	t.Parallel()
+	follow := make(chan Event, 1)
+	follow <- Event{Done: true}
+	f := &fake{follow: follow}
+	l := newLogs(context.Background(), f.backend().Logs, "Partidita").(*logs)
+
+	l.Init()
+	if f.followAt != DefaultLogLines {
+		t.Fatalf("initial tail = %d, want %d", f.followAt, DefaultLogLines)
+	}
+
+	l.Update(press("n"))
+	if !l.editing {
+		t.Fatalf("n did not open the tail editor")
+	}
+	l.input.SetValue("250")
+
+	_, cmd := l.Update(press("enter"))
+	drain(t, cmd)
+
+	if l.editing {
+		t.Fatalf("enter left the tail editor open")
+	}
+	if l.tail != 250 {
+		t.Fatalf("tail = %d, want 250", l.tail)
+	}
+	if f.followAt != 250 {
+		t.Fatalf("the follower restarted with %d lines, want 250", f.followAt)
+	}
+}
+
+// covers the retention the backup form hands to the backend
+func TestBackupFormPassesTheRetention(t *testing.T) {
+	t.Parallel()
+	f := &fake{}
+	form := newBackupForm(context.Background(), f.backend().Server, Item{Name: "Partidita", BackupKeep: 3}).(*form)
+
+	keep := indexOf(t, form.fields, "keep")
+	if got := form.fields[keep].input.Value(); got != "3" {
+		t.Fatalf("default keep = %q, want the instance value 3", got)
+	}
+	form.fields[keep].input.SetValue("2")
+
+	done := find[formDoneMsg](t, drain(t, form.apply()))
+	if done.err != nil {
+		t.Fatalf("backup: %v", done.err)
+	}
+	if f.backupKeep != 2 {
+		t.Fatalf("backend got keep %d, want 2", f.backupKeep)
+	}
+}
+
+// covers the systemd options reaching the install and uninstall calls
+func TestServiceOptionsReachTheBackend(t *testing.T) {
+	t.Parallel()
+	f := &fake{}
+	s := newService(context.Background(), f.backend().Service, Item{Name: "Partidita"}).(*service)
+	s.opts = ServiceOptions{UnitDir: "/tmp/units", Binary: "/tmp/gamehost", Systemctl: "/tmp/systemctl"}
+
+	drain(t, s.install(true))
+	if f.serviceOpts != s.opts {
+		t.Fatalf("install options = %#v, want %#v", f.serviceOpts, s.opts)
+	}
+
+	drain(t, s.runUninstall())
+	if f.serviceOpts != s.opts {
+		t.Fatalf("uninstall options = %#v, want %#v", f.serviceOpts, s.opts)
+	}
+}
+
+// covers the panel starting an instance, the lobby version of serve --start
+func TestPanelBootStartReachesTheBackend(t *testing.T) {
+	t.Parallel()
+	f := &fake{panelAddr: "127.0.0.1:8080"}
+	p := newPanel(context.Background(), f.backend().Panel, []Item{{Name: "Partidita"}}).(*panel)
+
+	p.Update(press("b"))
+	if p.bootName() != "Partidita" {
+		t.Fatalf("boot = %q, want Partidita", p.bootName())
+	}
+
+	p, _ = applyTo(t, p, p.start())
+	if f.panelBoot != "Partidita" {
+		t.Fatalf("backend started %q with the panel, want Partidita", f.panelBoot)
+	}
+}
+
+// covers the build version the environment screen shows
+func TestDoctorShowsTheVersion(t *testing.T) {
+	t.Parallel()
+	f := &fake{version: "v9.9.9"}
+	d := newDoctor(f.backend().Env).(*doctor)
+	d.Init()
+
+	if !strings.Contains(d.View(100, 40), "v9.9.9") {
+		t.Fatalf("the view does not show the version:\n%s", d.View(100, 40))
 	}
 }
 

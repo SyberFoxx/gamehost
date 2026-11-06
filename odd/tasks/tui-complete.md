@@ -85,6 +85,7 @@ reachable inside the TUI, and the TUI must be the first thing a person sees. Bra
 | T12 | systemd screen | S9 | inline | done |
 | T13 | web panel screen | S11 | inline | done |
 | T14 | README, `docs/design.md`, `AGENTS.md` | S15 | inline | done |
+| T15 | parity with the remaining flags: `logs -n`, `backup --keep`, `service --dir/--binary/--systemctl`, `serve --start`, `version` | S2, S14, S15 | inline | done |
 
 Work units follow the task table. PR slices, in `feature-branch-chain` order:
 
@@ -120,3 +121,18 @@ Work units follow the task table. PR slices, in `feature-branch-chain` order:
   gate is unchanged, so the systemd units and `serve` keep the behaviour they had.
 - **L8** — The branch now carries the code, the tests and the documentation. Pushed to `origin`;
   the repository stays under the owner's account with no additional collaborators.
+- **L9** — SteamCMD installed at `~/.local/share/steamcmd` and exercised for real: the first run
+  self-updates to client `1792617903`; `gamehost install corekeeper` ends with
+  `Success! App '1963720' fully installed.` and a 568 MB `files/`; `gamehost update corekeeper`
+  writes a 4.7 MB `pre-update_<timestamp>.tar.gz` and revalidates in 6.3 s on a warm cache.
+- **L10** — A pty harness (`python3` + `pty`) drove the real lobby with that instance: 22 checks
+  passed, including the streamed SteamCMD install, the log tail reload, a real backup through the
+  retention form and the panel listening on `127.0.0.1:8080`. No test in the repository needs a
+  TTY; this was a manual smoke run.
+- **L11** — Parity audit closed the last gaps: the log screen edits the tail size (`logs -n`), the
+  backup form asks for the retention (`backup --keep`), the systemd screen edits
+  `--dir/--binary/--systemctl`, the panel picks an instance to start (`serve --start`) and the
+  environment screen shows the build version. Foreground `start` stays out on purpose: the alternate
+  screen owns the terminal.
+- **L12** — `gofmt -l .`, `go vet ./...` and `go test -race ./...` are clean; the documents carry the
+  measured install, update and smoke-test facts instead of estimates.

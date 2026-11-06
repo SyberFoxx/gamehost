@@ -7,11 +7,16 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// streamEventMsg carries one step of a streamed operation.
-type streamEventMsg struct{ event Event }
+// streamEventMsg carries one step of a streamed operation. The sequence number
+// identifies the channel it came from, so a cancelled stream cannot feed a
+// screen that already started a new one.
+type streamEventMsg struct {
+	seq   int
+	event Event
+}
 
 // streamClosedMsg reports that a streamed operation closed its channel.
-type streamClosedMsg struct{}
+type streamClosedMsg struct{ seq int }
 
 // streamStartMsg asks the file screen to start one operation after a
 // confirmation.
@@ -27,6 +32,7 @@ type files struct {
 	running bool
 	cancel  context.CancelFunc
 	source  <-chan Event
+	seq     int
 
 	lines  []string
 	err    error
@@ -60,6 +66,9 @@ func (f *files) Update(msg tea.Msg) (screen, tea.Cmd) {
 		return f, f.start(msg.update)
 
 	case streamEventMsg:
+		if msg.seq != f.seq {
+			return f, nil
+		}
 		if msg.event.Line != "" {
 			f.lines = appendLines(f.lines, msg.event.Line)
 			if f.follow {
@@ -76,7 +85,9 @@ func (f *files) Update(msg tea.Msg) (screen, tea.Cmd) {
 		return f, f.next()
 
 	case streamClosedMsg:
-		f.done, f.running = true, false
+		if msg.seq == f.seq {
+			f.done, f.running = true, false
+		}
 		return f, nil
 
 	case resumeMsg:
@@ -146,6 +157,7 @@ func (f *files) start(update bool) tea.Cmd {
 		f.option = 0
 		f.source = f.backend.Install(child, f.item.Name)
 	}
+	f.seq++
 	return f.next()
 }
 
@@ -159,16 +171,16 @@ func (f *files) stop() {
 
 // next reads one event from the stream, one command per event.
 func (f *files) next() tea.Cmd {
-	source := f.source
+	source, seq := f.source, f.seq
 	if source == nil {
-		return func() tea.Msg { return streamClosedMsg{} }
+		return func() tea.Msg { return streamClosedMsg{seq: seq} }
 	}
 	return func() tea.Msg {
 		event, ok := <-source
 		if !ok {
-			return streamClosedMsg{}
+			return streamClosedMsg{seq: seq}
 		}
-		return streamEventMsg{event: event}
+		return streamEventMsg{seq: seq, event: event}
 	}
 }
 

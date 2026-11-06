@@ -208,7 +208,7 @@ func (l *lobby) activate() tea.Cmd {
 			func() tea.Msg { return runActionMsg{kind: actStop, name: name} },
 		)
 	case actBackup:
-		return l.run(actBackup, item.Name)
+		return push(newBackupForm(l.ctx, l.backend.Server, item))
 	case actLogs:
 		return push(newLogs(l.ctx, l.backend.Logs, item.Name))
 	case actDetails:
@@ -222,11 +222,11 @@ func (l *lobby) activate() tea.Cmd {
 	case actBackups:
 		return push(newBackups(l.ctx, l.backend.Server, item))
 	case actService:
-		return push(newService(l.backend.Service, item))
+		return push(newService(l.ctx, l.backend.Service, item))
 	case actDoctor:
 		return push(newDoctor(l.backend.Env))
 	case actPanel:
-		return push(newPanel(l.ctx, l.backend.Panel))
+		return push(newPanel(l.ctx, l.backend.Panel, l.items))
 	}
 	return nil
 }
@@ -236,7 +236,7 @@ func (l *lobby) run(kind action, name string) tea.Cmd {
 	backend, ctx := l.backend.Server, l.ctx
 	l.busy, l.frame = true, 0
 
-	verb := map[action]string{actStart: "starting", actStop: "stopping", actBackup: "backing up"}[kind]
+	verb := map[action]string{actStart: "starting", actStop: "stopping"}[kind]
 	return tea.Batch(
 		report("%s %s…", verb, name),
 		func() tea.Msg {
@@ -247,8 +247,6 @@ func (l *lobby) run(kind action, name string) tea.Cmd {
 				text, err = backend.Start(ctx, name)
 			case actStop:
 				text, err = backend.Stop(ctx, name)
-			case actBackup:
-				text, err = backend.Backup(ctx, name)
 			}
 			return resultMsg{text: text, err: err}
 		},

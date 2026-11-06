@@ -16,6 +16,7 @@ type reportMsg struct {
 type doctor struct {
 	backend EnvBackend
 	report  Report
+	version string
 	loaded  bool
 	err     string
 }
@@ -25,8 +26,11 @@ func newDoctor(backend EnvBackend) screen {
 	return &doctor{backend: backend}
 }
 
-// Init runs the checks.
-func (d *doctor) Init() tea.Cmd { return d.load() }
+// Init runs the checks and reads the build version.
+func (d *doctor) Init() tea.Cmd {
+	d.version = d.backend.Version()
+	return d.load()
+}
 
 // load runs doctor away from the UI loop.
 func (d *doctor) load() tea.Cmd {
@@ -68,6 +72,9 @@ func (d *doctor) Update(msg tea.Msg) (screen, tea.Cmd) {
 // View draws every check with its status and the verdict.
 func (d *doctor) View(width, _ int) string {
 	head := titleStyle.Render("Environment") + "   " + dimStyle.Render("gamehost doctor")
+	if d.version != "" {
+		head += "   " + dimStyle.Render("gamehost "+d.version)
+	}
 
 	body := head + "\n\n"
 	switch {

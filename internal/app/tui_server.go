@@ -47,15 +47,16 @@ func lobbyStop(_ context.Context, name string) (string, error) {
 	return lastLine(out.String()), nil
 }
 
-// lobbyBackup archives the world of a stopped instance.
-func lobbyBackup(_ context.Context, name string) (string, error) {
+// lobbyBackup archives the world of a stopped instance with the retention the
+// backup form asked for, the same value `backup --keep` takes.
+func lobbyBackup(_ context.Context, name string, keep int) (string, error) {
 	s, inst, err := loadInstance(name)
 	if err != nil {
 		return "", err
 	}
 
 	var out bytes.Buffer
-	if _, err := backupInstance(s, inst, defaultBackupKeep, &out); err != nil {
+	if _, err := backupInstance(s, inst, keep, &out); err != nil {
 		return "", err
 	}
 	return firstLine(out.String()), nil

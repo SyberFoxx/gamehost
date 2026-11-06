@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -17,8 +18,10 @@ type uninstallServiceMsg struct{}
 
 // service shows and manages the systemd units of one instance.
 type service struct {
+	ctx     context.Context
 	backend ServiceBackend
 	item    Item
+	opts    ServiceOptions
 
 	status ServiceStatus
 	loaded bool
@@ -27,8 +30,8 @@ type service struct {
 }
 
 // newService returns the systemd screen of one instance.
-func newService(backend ServiceBackend, item Item) screen {
-	return &service{backend: backend, item: item}
+func newService(ctx context.Context, backend ServiceBackend, item Item) screen {
+	return &service{ctx: ctx, backend: backend, item: item}
 }
 
 // Init reads the unit state.
@@ -94,6 +97,11 @@ func (s *service) key(msg tea.KeyPressMsg) tea.Cmd {
 		return s.install(true)
 	case "u":
 		return s.uninstall()
+	case "a":
+		if s.busy {
+			return nil
+		}
+		return s.optionsForm()
 	}
 	return nil
 }
@@ -104,11 +112,11 @@ func (s *service) install(enable bool) tea.Cmd {
 		return nil
 	}
 	s.busy = true
-	backend, name := s.backend, s.item.Name
+	backend, name, opts := s.backend, s.item.Name, s.opts
 	return tea.Batch(
 		report("installing units for %s…", name),
 		func() tea.Msg {
-			text, err := backend.Install(name, enable)
+			text, err := backend.Install(name, enable, opts)
 			return resultMsg{text: text, err: err}
 		},
 	)
@@ -133,11 +141,35 @@ func (s *service) runUninstall() tea.Cmd {
 		return nil
 	}
 	s.busy = true
-	backend, name := s.backend, s.item.Name
+	backend, name, opts := s.backend, s.item.Name, s.opts
 	return func() tea.Msg {
-		text, err := backend.Uninstall(name)
+		text, err := backend.Uninstall(name, opts)
 		return resultMsg{text: text, err: err}
 	}
+}
+
+// optionsForm edits the paths `service install` and `service uninstall`
+// accept, so the lobby can reach the same flags the command has.
+func (s *service) optionsForm() tea.Cmd {
+	opts := s.opts
+	return push(&form{
+		ctx:   s.ctx,
+		title: "Systemd options · " + s.item.Name,
+		cli:   "gamehost service install " + s.item.Name,
+		fields: []formField{
+			textField("dir", "Unit directory", "empty uses the systemd user directory", opts.UnitDir),
+			textField("binary", "Binary", "empty uses this gamehost binary", opts.Binary),
+			textField("systemctl", "systemctl", "empty searches PATH", opts.Systemctl),
+		},
+		submit: func(values map[string]string) (string, error) {
+			s.opts = ServiceOptions{
+				UnitDir:   strings.TrimSpace(values["dir"]),
+				Binary:    strings.TrimSpace(values["binary"]),
+				Systemctl: strings.TrimSpace(values["systemctl"]),
+			}
+			return "systemd options saved", nil
+		},
+	})
 }
 
 // View draws the unit names, the directory and the state.
@@ -149,12 +181,22 @@ func (s *service) View(width, _ int) string {
 	case !s.loaded:
 		body += dimStyle.Render("reading the unit state…")
 	default:
+		directory := s.status.UnitDir
+		if s.opts.UnitDir != "" {
+			directory = s.opts.UnitDir
+		}
 		rows := [][2]string{
 			{"unit", s.status.Unit},
 			{"timer", orDash(s.status.Timer)},
-			{"directory", orDash(s.status.UnitDir)},
+			{"directory", orDash(directory)},
 			{"installed", yesNo(s.status.Installed)},
 			{"active", yesNo(s.status.Active)},
+		}
+		if s.opts.Binary != "" {
+			rows = append(rows, [2]string{"binary", s.opts.Binary})
+		}
+		if s.opts.Systemctl != "" {
+			rows = append(rows, [2]string{"systemctl", s.opts.Systemctl})
 		}
 		lines := make([]string, 0, len(rows))
 		for _, row := range rows {
@@ -175,7 +217,7 @@ func (s *service) footer() string {
 	if s.busy {
 		return dimStyle.Render("working…")
 	}
-	return dimStyle.Render("i install    e install and enable    u uninstall    r reload    esc back")
+	return dimStyle.Render("i install    e install and enable    u uninstall    a options    r reload    esc back")
 }
 
 // orDash shows a dash for an empty value.
@@ -201,5 +243,6 @@ func (s *service) Keys() []KeyHelp {
 		{"i", "write the units", "gamehost service install " + name},
 		{"e", "write and enable them", "gamehost service install " + name + " --enable"},
 		{"u", "remove the units", "gamehost service uninstall " + name},
+		{"a", "unit directory, binary and systemctl", "--dir --binary --systemctl"},
 	}
 }

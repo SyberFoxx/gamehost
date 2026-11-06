@@ -217,15 +217,18 @@ usable.
 | Details | read-only view of the configuration and the state | `show`, `status` |
 | Settings | edits the values the launch flags read; refuses while the server runs | `config` |
 | Files | install or update, streaming the SteamCMD output; `Esc` cancels the download | `install`, `update` |
-| Logs | newest tail, then follows live; `G` returns to the live edge | `logs -f` |
-| Backups | `b` archives, `Enter` restores, `i` imports a `.world.gzip` | `backup`, `restore`, `import-world` |
+| Logs | newest tail, then follows live; `G` returns to the live edge and `n` reloads with another tail size | `logs -f`, `logs -n` |
+| Backups | `b` archives after asking the retention, `Enter` restores, `i` imports a `.world.gzip` | `backup --keep`, `restore`, `import-world` |
 | Admins | `a` adds, `d` removes, both only while stopped | `admin add`, `admin remove` |
-| Systemd | `i` writes the units, `e` also enables them, `u` removes them | `service install`, `service uninstall` |
-| Environment | every `doctor` check with its status and a verdict | `doctor` |
-| Web panel | starts the panel on `127.0.0.1:8080` and stops it on `Esc` | `serve` |
+| Systemd | `i` writes the units, `e` also enables them, `u` removes them, `a` edits `--dir`, `--binary` and `--systemctl` | `service install`, `service uninstall` |
+| Environment | every `doctor` check with its status, the build version and a verdict | `doctor`, `version` |
+| Web panel | starts the panel on `127.0.0.1:8080` with the backup schedule, `b` picks an instance to start with it, `Esc` stops it | `serve`, `serve --start` |
 
 Destructive actions ask first: stop, update, restore, import, uninstall and remove-admin show a
 dialog naming the instance and what will happen. The web panel dies with the lobby.
+
+`start` in the foreground has no lobby screen on purpose: the terminal belongs to the alternate
+screen. The lobby always uses the detached supervisor, which is what `start --detach` does.
 
 The lobby only opens when both stdin and stdout are terminals. `gamehost | head`, a redirect or a
 script still gets the usage text and exit code 2, which is what the systemd units and the HTTP API
@@ -428,6 +431,24 @@ The test suite stops at the SteamCMD download. Once per machine, walk the whole 
 7. `gamehost backup corekeeper` writes an archive whose size grows with the world.
 8. Move `data/worlds/0.world.gzip` away, `gamehost restore corekeeper <archive>` and start again:
    the world is back with its builds.
+9. Run `gamehost` with no arguments and repeat 3, 6 and 7 from the lobby: `Files` streams
+   SteamCMD, `Stop` waits for the save, `Backups` lists and restores the archive it created.
+
+### Measured on a real install
+
+This path was exercised on 2026-11-06 (Nobara Linux 44, x86_64, 12 cores, 30 GB RAM, Core Keeper
+app `1963720`, SteamCMD `1792617903`):
+
+| Step | Observed |
+| --- | --- |
+| SteamCMD download | 2.4 MB tarball, self-updates on the first run before reaching the prompt |
+| `doctor` | `platform`, `data root`, `steamcmd` and `display` all `ok` on the desktop session |
+| `install corekeeper` | `Success! App '1963720' fully installed.`, `files/` is 568 MB |
+| `update corekeeper` | 6.3 s on a warm cache, after writing `pre-update_<timestamp>.tar.gz` (4.7 MB for a 5 MB world) |
+| Lobby smoke test | 22 checks in a real pty: banner, instance, doctor, streamed install, details, logs with a 250-line reload, backups with the retention form, panel listening on `127.0.0.1:8080` |
+
+The lobby run used the same SteamCMD and the same instance on disk, so a screen that disagrees with
+a command would have failed the check.
 
 ## Commands
 

@@ -32,6 +32,9 @@ func lobbyDoctor() (tui.Report, error) {
 	}, nil
 }
 
+// lobbyVersion reports the build version, the same string `version` prints.
+func lobbyVersion() string { return version }
+
 // lobbyGames lists the supported games with their display labels.
 func lobbyGames() []tui.GameChoice {
 	registrations := games.All()

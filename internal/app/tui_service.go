@@ -34,15 +34,21 @@ func lobbyServiceStatus(name string) (tui.ServiceStatus, error) {
 	return status, nil
 }
 
-// lobbyServiceInstall writes the units, optionally enabling them now.
-func lobbyServiceInstall(name string, enable bool) (string, error) {
+// lobbyServiceInstall writes the units, optionally enabling them now, with the
+// paths `service install --dir --binary --systemctl` accept.
+func lobbyServiceInstall(name string, enable bool, paths tui.ServiceOptions) (string, error) {
 	s, inst, err := loadInstance(name)
 	if err != nil {
 		return "", err
 	}
 
 	var out bytes.Buffer
-	opts := serviceInstallOptions{Enable: enable}
+	opts := serviceInstallOptions{
+		Enable:    enable,
+		Dir:       paths.UnitDir,
+		Binary:    paths.Binary,
+		Systemctl: paths.Systemctl,
+	}
 	if err := installService(s, inst, opts, &out, &out); err != nil {
 		return "", err
 	}
@@ -50,9 +56,9 @@ func lobbyServiceInstall(name string, enable bool) (string, error) {
 }
 
 // lobbyServiceUninstall removes the units of one instance.
-func lobbyServiceUninstall(name string) (string, error) {
+func lobbyServiceUninstall(name string, paths tui.ServiceOptions) (string, error) {
 	var out bytes.Buffer
-	if err := uninstallService("", "", name, &out, &out); err != nil {
+	if err := uninstallService(paths.UnitDir, paths.Systemctl, name, &out, &out); err != nil {
 		return "", err
 	}
 	return firstLine(out.String()), nil

@@ -2,11 +2,17 @@ package tui
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 )
+
+// defaultBackupKeep is the retention `gamehost backup` applies when the
+// instance has no scheduled keep of its own.
+const defaultBackupKeep = 5
 
 // restoreMsg asks the screen to replace the world with one archive the user
 // already confirmed.
@@ -151,20 +157,46 @@ func (b *backups) key(msg tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
-// backup archives the world now; it is safe while the server is stopped.
+// backup asks for the retention before archiving the world.
 func (b *backups) backup() tea.Cmd {
 	if b.busy {
 		return nil
 	}
-	b.busy = true
-	backend, ctx, name := b.backend, b.ctx, b.item.Name
-	return tea.Batch(
-		report("backing up %s…", name),
-		func() tea.Msg {
-			text, err := backend.Backup(ctx, name)
-			return resultMsg{text: text, err: err}
+	return push(newBackupForm(b.ctx, b.backend, b.item))
+}
+
+// newBackupForm archives the world with the retention the user confirms.
+func newBackupForm(ctx context.Context, backend ServerBackend, item Item) screen {
+	keep := item.BackupKeep
+	if keep <= 0 {
+		keep = defaultBackupKeep
+	}
+
+	return &form{
+		ctx:   ctx,
+		title: "Backup · " + item.Name,
+		cli:   "gamehost backup " + item.Name,
+		fields: []formField{
+			textField("keep", "Keep", "archives kept after pruning, oldest first", strconv.Itoa(keep)),
 		},
-	)
+		submit: func(values map[string]string) (string, error) {
+			count, err := parseKeep(values["keep"])
+			if err != nil {
+				return "", err
+			}
+			return backend.Backup(ctx, item.Name, count)
+		},
+	}
+}
+
+// parseKeep reads the retention of `backup --keep`.
+func parseKeep(value string) (int, error) {
+	value = strings.TrimSpace(value)
+	count, err := strconv.Atoi(value)
+	if err != nil || count <= 0 {
+		return 0, fmt.Errorf("backup keep %q is not a positive number", value)
+	}
+	return count, nil
 }
 
 // restore asks before replacing the world with the selected archive.
@@ -309,7 +341,7 @@ func (b *backups) editingText() bool { return b.imports }
 func (b *backups) Keys() []KeyHelp {
 	name := b.item.Name
 	return []KeyHelp{
-		{"b", "archive the world now", "gamehost backup " + name},
+		{"b", "archive the world, choose the retention", "gamehost backup " + name + " --keep"},
 		{"enter", "restore the selected archive", "gamehost restore " + name},
 		{"i", "import a .world.gzip", "gamehost import-world " + name},
 		{"r", "reload the archive list", ""},

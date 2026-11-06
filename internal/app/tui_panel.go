@@ -3,18 +3,25 @@ package app
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"time"
 )
 
 // servePanel listens on addr and serves the browser panel with the same
-// handler `serve` uses. The returned stop function shuts the listener down, and
-// the lobby context does it too when the user quits without closing the screen.
-func servePanel(ctx context.Context, addr string) (string, func(), error) {
+// handler, backup schedule and boot start `serve` uses. The returned stop
+// function shuts the listener down, and the lobby context does it too when the
+// user quits without closing the screen. Output goes nowhere: the alternate
+// screen owns the terminal.
+func servePanel(ctx context.Context, addr, start string) (string, func(), error) {
 	s, err := openStore()
 	if err != nil {
 		return "", nil, err
+	}
+
+	if start != "" {
+		startBootInstances(s, []string{start}, io.Discard)
 	}
 
 	listener, err := net.Listen("tcp", addr)
@@ -24,6 +31,9 @@ func servePanel(ctx context.Context, addr string) (string, func(), error) {
 
 	server := newPanelServer(s)
 	go func() { _ = server.Serve(listener) }()
+	// The lobby is the only long-lived process here, so it owns the schedule
+	// for as long as the panel runs.
+	go newBackupScheduler(s, io.Discard).Run(ctx)
 
 	stopped := make(chan struct{})
 	var once sync.Once

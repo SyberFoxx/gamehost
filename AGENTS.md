@@ -151,9 +151,19 @@ Candidates, easiest first:
   `Esc` on `Files` or `Logs` must stop the child SteamCMD or follower.
 - Forms send a `tui.Settings` of strings and `internal/app` parses it with the same helpers, defaults
   and messages as `create` and `config`. Do not parse or validate in `internal/tui`.
-- The web panel screen starts the same handler `serve` uses and owns the stop function; the lobby
-  context shuts the listener down. `servePanel` is the only place that listener is created inside
-  the lobby.
+- The web panel screen starts the same handler `serve` uses, owns the stop function, and also runs
+  the backup scheduler and the boot start. The lobby context shuts the listener down, so
+  `servePanel` is the only place that listener is created inside the lobby. Its output goes to
+  `io.Discard`: never write to stdout while the alternate screen is up.
+- The log screen restarts its follower when the tail size changes, and every streamed message
+  carries a sequence number. Keep it: a cancelled channel that closes late would otherwise mark the
+  new stream as finished.
+- The lobby reaches the per-run options with forms, not hidden constants: `Backup` asks for the
+  retention (`--keep`) and prefills the instance value; `Systemd` has an options form for `--dir`,
+  `--binary` and `--systemctl`. A new flag that changes behaviour needs the same treatment or an
+  explicit note that it is command-only.
+- Foreground `start` has no lobby screen: the alternate screen owns the terminal. The lobby always
+  uses the detached supervisor, the same path as `start --detach`.
 - `internal/tui` imports nothing from this project; it receives a `Backend` whose fields are
   functions. Do not import `store` or `instance` there, and never shell out to the `gamehost`
   binary: the adapter in `internal/app/tui.go` reuses `startDetached`, `stopInstance`,
