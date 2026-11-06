@@ -1,14 +1,15 @@
 # gamehost — design
 
-A terminal-first manager for dedicated game servers, written in Go, starting with **Core Keeper**.
+A terminal-first manager for dedicated game servers, written in Go, starting with **Core Keeper**,
+**Project Zomboid** and **Don't Starve Together**.
 
 The project doubles as a learning vehicle: every milestone introduces a Go concept that a real
 program needs (process control, signals, concurrency, `net/http`, tests with `-race`), instead of
 synthetic exercises.
 
-**Status:** M0–M13 implemented (`doctor`, instance model and store, `install`/`update`,
+**Status:** M0–M16 implemented (`doctor`, instance model and store, `install`/`update`,
 `start`/`status` with join information, `start --detach`, `stop`, `logs`/`logs -f`,
-`backup`/`restore`, `serve` with the HTTP API and panel, a second game driver, `import-world`,
+`backup`/`restore`, `serve` with the HTTP API and panel, two more game drivers, `import-world`,
 the per-instance lock, `config`, API backups, scheduled backup windows, and the lobby that reaches
 every one of them).
 
@@ -130,10 +131,61 @@ Primary source: [PZwiki, Dedicated server](https://pzwiki.net/wiki/Dedicated_ser
 | Files inside the cache | `Server/<name>.ini` plus `.lua` files, `Saves/Multiplayer/<name>/`, `db/`, `Logs/` |
 | Join | No game ID: players add the address and port in the Favorites tab |
 | Player limit and join password | only in `Server/<name>.ini`, no launch flag |
+| Mods | `WorkshopItems=<id>;<id>` and `Mods=<id>;<id>` at the top of `Server/<name>.ini` |
 
 The driver passes only what a flag can express: server name, both ports, cache directory and the
 admin password. Max players and the join password stay in the ini, which the server also rewrites,
 so gamehost does not fight it.
+
+The one deliberate exception to "the ini belongs to the server" is the mod list. `mods add` and
+`mods remove` rewrite only the `WorkshopItems=` and `Mods=` lines, leave every other byte in place
+and run only while the server is stopped; `mods list` reads the same two lines. A missing ini means
+the server has never started, and the command says so instead of inventing a file.
+
+### Don't Starve Together
+
+Primary source: [Klei, Dedicated Server Command Line Options Guide](https://support.klei.com/hc/en-us/articles/360029556192-Dedicated-Server-Command-Line-Options-Guide)
+and [Don't Starve Wiki, Dedicated Servers](https://dontstarve.wiki.gg/wiki/Guides/Don%E2%80%99t_Starve_Together_Dedicated_Servers),
+checked against a real install (build `762172`) on this machine.
+
+| Fact | Value |
+| --- | --- |
+| Dedicated server Steam app | `343050` (~4.6 GB) |
+| Steam login | `anonymous` |
+| Binary | `bin64/dontstarve_dedicated_server_nullrenderer_x64`, run with `bin64` as working directory |
+| Storage root | `-persistent_storage_root <dir>` replaces `~/.klei/DoNotStarveTogether` |
+| Cluster | `-conf_dir <name>` is a directory inside the storage root; `-cluster <cluster>` selects one of its children |
+| Shard | `-shard Master`; a single shard needs no `cluster_key` and no Caves shard |
+| Files | `<root>/<conf_dir>/<cluster>/cluster.ini`, `cluster_token.txt`, `adminlist.txt`; `<cluster>/Master/server.ini` |
+| World data | `<cluster>/Master/save/`, plus `server_log.txt` and `backup/` next to it |
+| Caves | a second process with `-shard Caves`, `<cluster>/Caves/server.ini`, `[SHARD]` in `cluster.ini` and internal port `10888` |
+| Admin list | one Klei user id (`KU_...`) per line in `<cluster>/adminlist.txt`; the server reads it at startup |
+| Port | `-port` overrides `[NETWORK] server_port`, default `10999` UDP |
+| Players | `-players` overrides `[GAMEPLAY] max_players`, 1–64 |
+| Online cluster | Needs a token from `accounts.klei.com` in `cluster_token.txt`; without it the server exits |
+| Offline cluster | `offline_cluster = true` plus `-offline`; LAN only and the port must be 10998–11018 |
+| Join | No game ID: the cluster appears in the server browser by `cluster_name`, or players connect to IP:port |
+| Runtime dependency | `libcurl-gnutls.so.4`, which Fedora and Nobara do not ship |
+
+What the real run confirmed: the server generated a world (`World generated on build 762172`),
+printed `Telling Client our new session identifier: D8835938996F494F`, wrote the save under
+`<cluster>/Master/save/`, appended `[ACCOUNT] encode_user_path = true` to `server.ini` without
+touching the rest, and stopped cleanly on `SIGTERM` with exit 0. A `backup` of that data directory
+was 1.1 MB for 6.3 MB of files. An online cluster with a real Klei token logged
+`Token retrieved from: .../cluster_token.txt`, a new session id and
+`Server registered via geo DNS in us-east-1`, so registration works without extra flags.
+
+With `--caves` the driver writes the shard section of `cluster.ini` (once, preserving what the
+player wrote), renders `Caves/server.ini` with `is_master = false`, and starts both shards in one
+process group. The Caves shard listens on the next UDP port (`port + 1`), so an offline cluster keeps
+both ports inside the 10998–11018 range. The pid in `state.json` is the Master, and every stop
+signal targets the shared group; a shard that dies without being asked takes the instance down
+instead of leaving a surface world whose portals point at nothing.
+
+`gamehost` owns only what the flags and a missing file need: it creates `cluster.ini` and
+`server.ini` when they do not exist and refreshes `cluster_token.txt` (mode `0600`) for an online
+cluster. Once a file exists, the server and the player own it; the driver never rewrites the ini
+files. Mode, PvP, the join password and the cluster description stay in `cluster.ini`.
 
 ## 3. Architecture
 
@@ -145,6 +197,7 @@ graph TD
     B --> M["internal/tui"]
     K --> D["internal/corekeeper"]
     K --> L["internal/projectzomboid"]
+    K --> N["internal/dontstarvetogether"]
     B --> E["internal/steamcmd"]
     B --> F["internal/backup"]
     B --> G["internal/httpapi"]
@@ -165,10 +218,11 @@ graph TD
 | `internal/instance` | domain model and validation | M2 |
 | `internal/process` | supervise one OS process: start, signal, wait, state | M3 |
 | `internal/logs` | log file plus in-memory ring buffer and subscribers | M4 |
-| `internal/game` | driver contracts: install args, launch, join and session id | M7 |
+| `internal/game` | driver contracts: install args, launch, join, session id and optional startup files | M7, M14 |
 | `internal/games` | registry that resolves a game name to its driver | M7 |
 | `internal/corekeeper` | Core Keeper driver: args, binary, `GameID.txt` | M3 |
 | `internal/projectzomboid` | Project Zomboid driver: Steam app, `start-server.sh`, ports | M7 |
+| `internal/dontstarvetogether` | Don't Starve Together driver: Steam app, cluster files, token, offline mode | M14 |
 | `internal/steamcmd` | install/update a dedicated server through SteamCMD | M1 |
 | `internal/backup` | tar.gz snapshots of the data directory with retention | M5 |
 | `internal/httpapi` | HTTP API plus SSE log stream and embedded UI | M6 |
@@ -189,14 +243,16 @@ Rules that keep the project idiomatic:
 ```go
 type Instance struct {
     Name          string
-    Game          string // corekeeper | projectzomboid
+    Game          string // corekeeper | projectzomboid | dontstarvetogether
     InstallDir    string
     DataDir       string
     World         World
     Network       Network
-    MaxPlayers    int    // corekeeper only
+    MaxPlayers    int    // corekeeper and dontstarvetogether
     GameID        string // corekeeper only
     AdminPassword string // projectzomboid only
+    ClusterToken  string // dontstarvetogether online only
+    Caves         bool   // dontstarvetogether only
 }
 
 type World struct {
@@ -207,7 +263,7 @@ type World struct {
 }
 
 type Network struct {
-    Mode     string // sdr | direct
+    Mode     string // sdr | direct | online | offline
     Port     int
     UDPPort  int    // projectzomboid only
     Password string // corekeeper only
@@ -262,7 +318,7 @@ $XDG_DATA_HOME/gamehost/            default ~/.local/share/gamehost
     ├── instance.json               user configuration
     ├── state.json                  runtime state, rewritten on every transition
     ├── files/                      SteamCMD install dir (-force_install_dir)
-    ├── data/                       -datapath, holds worlds
+    ├── data/                       -datapath (Core Keeper), -cachedir (Project Zomboid), storage root (Don't Starve Together)
     ├── logs/<timestamp>.log        one file per run, newest ten kept
     ├── backups/                    <timestamp>.tar.gz, pre-restore_<timestamp>.tar.gz
     └── run.lock                    flock held by the running server or a data command
@@ -277,7 +333,7 @@ Nothing generated by the manager lives inside the git repository.
 | `gamehost` | open the interactive lobby, the front end of every command below; only when stdin and stdout are terminals | M12, M13 |
 | `gamehost version` | print build version | M0 |
 | `gamehost doctor` | check SteamCMD, write permissions, disk space, display | M0 |
-| `gamehost install <name>` | create instance if needed and download app `1963720` | M1 |
+| `gamehost install <name>` | create the instance directories if needed and download the game's Steam app | M1 |
 | `gamehost update <name>` | archive `data/`, then SteamCMD `app_update ... validate`; stopped only | M1 |
 | `gamehost create <name>` | write `instance.json` from flags | M2 |
 | `gamehost list` | table of instances and phases | M2 |
@@ -292,9 +348,9 @@ Nothing generated by the manager lives inside the git repository.
 | `gamehost import-world <name> <file>` | copy a `.world.gzip` save into the instance slot; stopped only | M8 |
 | `gamehost config <name> [flags]` | print or change the settings the launch flags express; stopped only | M9 |
 | `gamehost serve [--addr] [--start NAME]` | HTTP API, UI, the backup schedule and the boot start | M6, M10 |
-| `gamehost admin list <name>` | print the admin list; safe while running | M10 |
-| `gamehost admin add <name> <steamid> [--name NAME] [--limited]` | insert or update one admin; stopped only | M10 |
-| `gamehost admin remove <name> <steamid>` | delete one admin; stopped only | M10 |
+| `gamehost admin list <name>` | print the admin list; safe while running | M10, M15 |
+| `gamehost admin add <name> <id> [--name NAME] [--limited]` | insert or update one admin; Steam ID for Core Keeper, `KU_...` for Don't Starve Together; stopped only | M10, M15 |
+| `gamehost admin remove <name> <id>` | delete one admin; stopped only | M10, M15 |
 | `gamehost service install <name> [--enable]` | write the systemd user units, optionally enable and start them | M11 |
 | `gamehost service uninstall <name>` | disable, stop and remove the units | M11 |
 
@@ -449,6 +505,9 @@ Why this shape:
 | M11 | systemd units: `service install`, `service uninstall` | one command writes, enables and starts the server and its backup timer; uninstall leaves no dangling link | text rendering with escaping, `os/exec` for systemctl, filesystem tests |
 | M12 | interactive lobby | `gamehost` with no arguments on a terminal shows the banner, the selected instance and a menu; start, stop, backup and logs work without typing a flag; a pipe still gets the usage text | the Elm architecture, terminal state ownership, presentation isolated behind a function-valued backend |
 | M13 | the lobby is the whole program | every command is reachable from the lobby: create and edit an instance, install/update with live output, follow the log with a selectable tail, list/create/restore/import backups with the retention form, admins, systemd units with `dir`/`binary`/`systemctl`, `doctor` with the build version and the web panel with the backup schedule and a boot start; destructive actions confirm; `?` shows the command each key replaces | screen stack, streaming over channels, modal state, textinput, form validation at the adapter |
+| M14 | Don't Starve Together driver | a cluster creates, installs, starts offline without a token, writes `cluster.ini`/`server.ini` once, backs up and stops cleanly; an online cluster requires a Klei token and the wizard asks for it | driver-owned files behind `game.Preparer`, per-game validation, a token that stays out of the process argv |
+| M15 | Caves shard and DST admins | `--caves` starts both shards, one stop reaches both, a dying shard takes the instance down, and the lobby adds or removes `KU_...` admins in `adminlist.txt` | multi-process supervision in one process group, driver-owned admin files behind a small interface, per-game id validation |
+| M16 | Project Zomboid mods | `mods add`, `remove` and `list` edit only the two mod lines of the server ini, the lobby has a Mods screen, and every other ini line survives byte for byte | text file editing with in-place line replacement, driver-owned mod store, validation before writing |
 
 Each milestone is one work unit: code, tests and doc updates in the same commit.
 
@@ -535,6 +594,27 @@ Each milestone is one work unit: code, tests and doc updates in the same commit.
 - **Game-specific settings stay in the game's own files when the game owns them.** Project Zomboid
   rewrites its ini, so max players and the join password stay there; gamehost only manages what the
   startup flags can express.
+- **One instance can be more than one process.** Don't Starve Together splits the world into a
+  Master and an optional Caves shard, and the game requires two processes. The second one joins the
+  process group of the first, so the pid already stored, the existing stop signal and the systemd
+  `KillMode=mixed` keep working unchanged; the supervisor waits for both and treats a shard that
+  dies unasked as a crash. A second pid file would have duplicated the lock and the state machine
+  for no gain.
+- **Mods are the one ini write gamehost allows.** Project Zomboid has no flag for mods: the server
+  reads `WorkshopItems=` and `Mods=` from its ini and preserves unknown lines when it rewrites the
+  file. Rather than keep a second copy of the list in `instance.json` that the server would ignore,
+  the driver edits exactly those two lines in place, keeps every other byte and refuses to run
+  while the server is up. `game.ModStore` keeps the CLI and the lobby free of the file format.
+- **The admin list belongs to the driver.** Core Keeper writes `Admins.json` with Steam IDs and
+  privileges, Don't Starve Together writes `adminlist.txt` with Klei IDs and no privileges. A small
+  `game.AdminStore` keeps both behind one interface, so the CLI and the lobby never branch on the
+  game name and a new game only implements three methods.
+- **A driver that needs files writes them at start, through `game.Preparer`.** Don't Starve Together
+  refuses to boot without `cluster.ini`, `server.ini` and, online, `cluster_token.txt`. The token is
+  written with mode `0600` immediately before the launch instead of travelling in the argv, where
+  `ps` would show it to every user. The ini files are created only when missing: the server appends
+  its own sections and the player owns every setting gamehost does not model, so a rewrite would be
+  a data loss bug dressed as idempotence.
 - **The lobby is a front end, not a second program.** `internal/tui` imports nothing from this
   project: it receives a `Backend` whose fields are functions, and `internal/app` fills them with
   the same helpers the commands call. The lobby never shells out to `gamehost`, so a phase, a grace

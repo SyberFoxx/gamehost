@@ -20,6 +20,7 @@ const (
 	actSettings
 	actFiles
 	actAdmins
+	actMods
 	actBackups
 	actService
 	actDoctor
@@ -48,6 +49,7 @@ var menuLines = []menuLine{
 	{action: actSettings, label: "Settings", hint: "world, players, network, backups"},
 	{action: actFiles, label: "Files", hint: "install or update the server files"},
 	{action: actAdmins, label: "Admins", hint: "who can run admin commands"},
+	{action: actMods, label: "Mods", hint: "workshop items and mod ids (Project Zomboid)"},
 	{action: actBackups, label: "Backups", hint: "list, restore or import a world"},
 	{action: actService, label: "Systemd", hint: "run it with systemd units"},
 	{header: true, label: "system"},
@@ -219,6 +221,8 @@ func (l *lobby) activate() tea.Cmd {
 		return push(newFiles(l.ctx, l.backend.Files, item))
 	case actAdmins:
 		return push(newAdmins(l.ctx, l.backend.Admins, item))
+	case actMods:
+		return push(newMods(l.ctx, l.backend.Mods, item))
 	case actBackups:
 		return push(newBackups(l.ctx, l.backend.Server, item))
 	case actService:

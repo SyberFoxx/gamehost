@@ -77,6 +77,11 @@ func lobbyBackend() tui.Backend {
 			Add:    lobbyAdminAdd,
 			Remove: lobbyAdminRemove,
 		},
+		Mods: tui.ModsBackend{
+			List:   lobbyMods,
+			Add:    lobbyModAdd,
+			Remove: lobbyModRemove,
+		},
 		Service: tui.ServiceBackend{
 			Status:    lobbyServiceStatus,
 			Install:   lobbyServiceInstall,

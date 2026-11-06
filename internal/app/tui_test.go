@@ -225,6 +225,66 @@ func TestCreateOptionsRejectsBadValues(t *testing.T) {
 	}
 }
 
+// covers the cluster settings the wizard sends back for Don't Starve Together
+func TestDontStarveTogetherOptions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     tui.Settings
+		want      instance.Network
+		wantCaves bool
+		wantErr   bool
+	}{
+		{
+			name:  "online keeps the token",
+			input: tui.Settings{Game: instance.GameDontStarveTogether, MaxPlayers: "6", Network: "online", ClusterToken: " pds-g^KU_test "},
+			want:  instance.Network{Mode: instance.NetworkOnline, Port: instance.DontStarveTogetherPort},
+		},
+		{
+			name:      "offline with caves",
+			input:     tui.Settings{Game: instance.GameDontStarveTogether, MaxPlayers: "6", Network: "offline", Caves: "yes"},
+			want:      instance.Network{Mode: instance.NetworkOffline, Port: instance.DontStarveTogetherPort},
+			wantCaves: true,
+		},
+		{name: "online without a token", input: tui.Settings{Game: instance.GameDontStarveTogether, MaxPlayers: "6", Network: "online"}, wantErr: true},
+		{name: "too many players", input: tui.Settings{Game: instance.GameDontStarveTogether, MaxPlayers: "65", Network: "online", ClusterToken: "t"}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			opts, err := createOptions(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					// The token is checked by the model, not by the parser.
+					if _, err := instance.New("cave", opts); err == nil {
+						t.Fatalf("createOptions accepted %#v", tt.input)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("createOptions: %v", err)
+			}
+
+			opts.InstallDir = "/srv/files"
+			opts.DataDir = "/srv/data"
+			inst, err := instance.New("cave", opts)
+			if err != nil {
+				t.Fatalf("new instance: %v", err)
+			}
+			if inst.Network != tt.want {
+				t.Errorf("Network = %+v, want %+v", inst.Network, tt.want)
+			}
+			if inst.Caves != tt.wantCaves {
+				t.Errorf("Caves = %v, want %v", inst.Caves, tt.wantCaves)
+			}
+		})
+	}
+}
+
 // covers the empty values a form sends back for a Core Keeper instance
 func TestCreateOptionsDefaults(t *testing.T) {
 	t.Parallel()

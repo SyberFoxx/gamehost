@@ -3,7 +3,8 @@
 ## Context
 
 `gamehost` is a terminal-first manager for dedicated game servers, written in Go 1.26.
-Supported games: Core Keeper (Steam app `1963720`) and Project Zomboid (Steam app `380870`).
+Supported games: Core Keeper (`1963720`), Project Zomboid (`380870`) and Don't Starve Together
+(`343050`).
 Module path: `github.com/syberfoxx/gamehost`.
 Entry point: `cmd/gamehost`. Design and roadmap: `docs/design.md`.
 
@@ -42,7 +43,12 @@ Entry point: `cmd/gamehost`. Design and roadmap: `docs/design.md`.
 
 ## Games and drivers
 
-Supported today: Core Keeper (Steam app `1963720`) and Project Zomboid (`380870`).
+Supported today: Core Keeper (`1963720`), Project Zomboid (`380870`) and Don't Starve Together
+(`343050`). The Don't Starve Together driver creates `cluster.ini`, `Master/server.ini` and, for an
+online cluster, `cluster_token.txt` (mode `0600`) before the launch through `game.Preparer`; it
+writes the ini files only when they are missing, because the server appends its own sections and
+the player owns the rest. With `--caves` it also adds the `[SHARD]` section once, writes
+`Caves/server.ini`, and launches a second process in the Master's process group.
 A game is one driver package plus one entry in `internal/games`; verify its contract in the official
 documentation and record the facts in `docs/design.md` before writing flags.
 
@@ -53,7 +59,6 @@ Candidates, easiest first:
 | Terraria (`105600`) | SteamCMD anonymous (verify) | `-world`, `-worldname`, `-autocreate`, `-port`, `-maxplayers`, `-password`; the first start creates the world; join by IP:7777 |
 | Valheim (`896660`) | SteamCMD anonymous | `valheim_server.x86_64` with `-name -port -world -password -public`; needs `SteamAppId=892970` and `steamclient.so`; also needs `Env` in `game.Launch` |
 | Palworld (`2394010`) | SteamCMD anonymous plus app `1007` libs | `PalServer.sh`, `PalWorldSettings.ini`, 8211 UDP plus the 27015 query port; memory hungry |
-| Don't Starve Together (`343050`) | SteamCMD anonymous | requires a cluster token up front and `cluster.ini`; the token breaks a one-shot `create` |
 | tModLoader (`1281930`) | SteamCMD anonymous | Terraria with mods: same flags plus the mod loader |
 | Minecraft Java | not on Steam: Mojang or Paper jar, EULA, Java runtime | needs a general install strategy instead of SteamCMD args, `server.properties`, RCON |
 | Factorio (`427520`) | authenticated SteamCMD login, or the headless tarball from factorio.com | `factorio --start-server`, `server-settings.json`; anonymous SteamCMD does not work, so the installer needs a login or tarball path |
@@ -104,6 +109,12 @@ Candidates, easiest first:
   Do not add a mutating route outside the `ServeHTTP` guard.
 - `update` also refuses a running instance and writes `backups/pre-update_<timestamp>.tar.gz` before
   SteamCMD starts; do not weaken either check to make an update convenient.
+- Project Zomboid reads `WorkshopItems=` (numeric Steam Workshop ids) and `Mods=` (folder names) from
+  the top of `Server/<name>.ini`. `mods list` works while running; add and remove need a stopped
+  server. The ini only exists after the first start, and a missing file is a clear error.
+- `game.AdminStore` and `game.ModStore` are optional driver interfaces; the CLI and the lobby assert
+  them instead of branching on the game name. Project Zomboid has no admin list yet, and only
+  Project Zomboid has a mod list.
 - `serve` binds `127.0.0.1:8080` and has no authentication; keep it on loopback and let a reverse
   proxy own access control.
 - The restore extractor rejects any tar entry that is not local to the target directory; keep that
@@ -116,8 +127,11 @@ Candidates, easiest first:
   `World.Index` slot, and archives `data/` first when it is not empty. Core Keeper saves do not
   start with the gzip magic their extension suggests; never re-add a header check.
 - `config` only edits `instance.json` for values the launch flags consume (players, mode, port,
-  password, game ID, admin password, backup window). Never write `ServerConfig.json`, the Project
-  Zomboid ini or `Admins.json` from it; the server owns those files.
+  password, game ID, admin password, cluster token, offline, caves, backup window). Never write
+  `ServerConfig.json`, `Admins.json` or the Project Zomboid ini from it; the server owns those files.
+- The one exception for the Project Zomboid ini is `mods add|remove`: it rewrites only the
+  `WorkshopItems=` and `Mods=` lines, in place, byte for byte, and only while stopped. Do not
+  generalize that write to other keys.
 - The scheduled backup is a maintenance window: stop, archive, prune, start again. `serve` can own
   the loop, or `service install` can write a systemd timer for it; never both on one instance. A
   failed archive must still restart the server, so the timer restarts in `ExecStopPost`, never in
@@ -141,6 +155,28 @@ Candidates, easiest first:
 - Project Zomboid has no game ID: players join by address and UDP port (`16261`, direct `16262`).
 - The `start-server.sh` script ships from SteamCMD; if it loses the execute bit, `start` fails with
   `permission denied` until it is `chmod +x`.
+- Don't Starve Together is Steam app `343050`; `bin64/dontstarve_dedicated_server_nullrenderer_x64`
+  must run with `bin64` as working directory. `-persistent_storage_root <data>`, `-conf_dir gamehost`
+  and `-cluster <instance>` put the cluster at `data/gamehost/<instance>/`.
+- An online DST cluster needs a Klei token from `accounts.klei.com`; an offline cluster
+  (`offline_cluster = true` plus `-offline`) needs no token but its UDP port must be 10998–11018.
+  `-players` and `-port` override `cluster.ini` and `server.ini`, so gamehost passes both.
+- The DST server appends sections such as `[ACCOUNT] encode_user_path = true` to `server.ini`;
+  never rewrite that file, and never treat the appended line as drift.
+- The DST binary needs `libcurl-gnutls.so.4`, which Fedora and Nobara do not package; the server
+  exits 127 with `error while loading shared libraries` until it is on the loader path.
+- DST has no game ID: the cluster is found in the server browser by its `cluster_name`, or by
+  address and UDP port.
+- The Caves shard is a second process with `-shard Caves` and the next UDP port. Both shards share
+  the Master's process group, so `state.json` keeps one pid and one stop signal reaches both; a
+  shard that dies unasked stops the instance instead of leaving dead portals behind.
+- `cluster.ini` gets its `[SHARD]` section only once (with `cluster_key`, `master_port 10888` and
+  `127.0.0.1`); never rewrite the rest of the file. `Caves/server.ini` uses Steam ports `27020` and
+  `27021`.
+- DST admins live in `<cluster>/adminlist.txt`, one `KU_...` id per line, and the server reads it at
+  startup. There are no privileges and no display names; reject `--limited` instead of writing a
+  file the server would ignore. `game.AdminStore` is the only interface the CLI and the lobby use,
+  with Core Keeper and DST implementing it.
 - The lobby only opens when stdin and stdout are terminals, and the gate lives in `app.Run` so
   `main` stays a dispatcher. Do not move it into `main`, and keep the stdin check: a redirected
   stdin would otherwise open an invisible UI. The lobby is the front end of every command, but the

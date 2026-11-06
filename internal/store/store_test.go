@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/syberfoxx/gamehost/internal/instance"
@@ -78,6 +79,16 @@ func TestStoreCreateLoad(t *testing.T) {
 		if !info.IsDir() {
 			t.Errorf("%q is not a directory", dir)
 		}
+	}
+
+	configPath := filepath.Join(s.Layout(inst.Name).Root, instanceFile)
+	config, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("stat %q: %v", configPath, err)
+	}
+	// The configuration may hold a cluster token, so other users cannot read it.
+	if perm := config.Mode().Perm(); perm != 0o600 {
+		t.Errorf("instance.json perm = %o, want 600", perm)
 	}
 
 	got, err := s.Load(inst.Name)

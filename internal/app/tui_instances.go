@@ -154,6 +154,8 @@ func createOptions(settings tui.Settings) (instance.Options, error) {
 		return coreKeeperOptions(settings, instance.Options{Game: instance.GameCoreKeeper})
 	case instance.GameProjectZomboid:
 		return projectZomboidOptions(settings, instance.Options{Game: instance.GameProjectZomboid})
+	case instance.GameDontStarveTogether:
+		return dontStarveTogetherOptions(settings, instance.Options{Game: instance.GameDontStarveTogether})
 	default:
 		return instance.Options{}, fmt.Errorf("create: unknown game %q: %w", settings.Game, ErrUsage)
 	}
@@ -167,6 +169,8 @@ func updateOptions(inst instance.Instance, settings tui.Settings) (instance.Opti
 		return coreKeeperOptions(settings, optionsOf(inst))
 	case instance.GameProjectZomboid:
 		return projectZomboidOptions(settings, optionsOf(inst))
+	case instance.GameDontStarveTogether:
+		return dontStarveTogetherOptions(settings, optionsOf(inst))
 	default:
 		return instance.Options{}, fmt.Errorf("config: unknown game %q: %w", inst.Game, ErrUsage)
 	}
@@ -241,6 +245,39 @@ func projectZomboidOptions(settings tui.Settings, opts instance.Options) (instan
 	return opts, nil
 }
 
+// dontStarveTogetherOptions fills the cluster half of an instance.
+func dontStarveTogetherOptions(settings tui.Settings, opts instance.Options) (instance.Options, error) {
+	players, err := parseInt("max players", settings.MaxPlayers)
+	if err != nil {
+		return instance.Options{}, err
+	}
+	port, err := parseInt("port", settings.Port)
+	if err != nil {
+		return instance.Options{}, err
+	}
+	every, err := parseBackupEvery(settings.BackupEvery)
+	if err != nil {
+		return instance.Options{}, err
+	}
+	keep, err := parseInt("backup keep", settings.BackupKeep)
+	if err != nil {
+		return instance.Options{}, err
+	}
+
+	opts.Game = instance.GameDontStarveTogether
+	opts.WorldName = settings.WorldName
+	opts.MaxPlayers = players
+	opts.Port = port
+	opts.Offline = strings.TrimSpace(settings.Network) == instance.NetworkOffline
+	opts.ClusterToken = strings.TrimSpace(settings.ClusterToken)
+	// An empty value means no: the form sends "no" explicitly, but an old
+	// settings file has no caves key at all.
+	opts.Caves = strings.TrimSpace(settings.Caves) == "yes"
+	opts.BackupEvery = every
+	opts.BackupKeep = keep
+	return opts, nil
+}
+
 // parseInt accepts an empty value as zero, which is how the flags treat it.
 func parseInt(field, value string) (int, error) {
 	value = strings.TrimSpace(value)
@@ -268,6 +305,9 @@ func settingsOf(inst instance.Instance) tui.Settings {
 		Password:      inst.Network.Password,
 		AdminPassword: inst.AdminPassword,
 		GameID:        inst.GameID,
+		Network:       inst.Network.Mode,
+		ClusterToken:  inst.ClusterToken,
+		Caves:         yesNo(inst.Caves),
 		BackupEvery:   inst.Backup.Every,
 		BackupKeep:    strconv.Itoa(inst.Backup.Keep),
 	}

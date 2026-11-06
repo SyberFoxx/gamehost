@@ -145,3 +145,8 @@ Work units follow the task table. PR slices, in `feature-branch-chain` order:
 - **L14** — Real `start`/`stop` through the lobby: the confirmation, the clean save and the stopped
   phase all worked against the running server, which exited `0` after 1m46s. That closes the TUI
   lifecycle check that the earlier smoke run left open.
+- **L15** — Restore proved end to end on a copy, never on the real world: `restoretest` was created
+  from the install, the world was imported from a copy of `Partidita` (matching SHA-256), backed up,
+  then deliberately corrupted. The lobby restored the archive, the hash matched the original again,
+  `pre-restore_2026-11-06_17-25-41.tar.gz` kept the broken data, and the server started with a new
+  session id (`pjLJkhSFTBpAkQv`, `successfully loaded world file`) before a clean stop.

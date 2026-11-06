@@ -866,6 +866,144 @@ func TestImportWorldRefusesRunningInstance(t *testing.T) {
 	}
 }
 
+// covers the Caves shard and the Klei admin list end to end
+func TestDontStarveTogetherCavesAndAdmins(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	out, err := runArgs(t, "create", "cave", "--game", "dontstarvetogether", "--offline", "--caves", "--world-name", "Owls")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if strings.Contains(out, "caves") {
+		t.Fatalf("create output = %q", out)
+	}
+	out, err = runArgs(t, "show", "cave")
+	if err != nil {
+		t.Fatalf("show: %v", err)
+	}
+	if !strings.Contains(out, "caves shard") || !strings.Contains(out, "yes") {
+		t.Errorf("show output = %q", out)
+	}
+
+	if _, err := runArgs(t, "admin", "add", "cave", "KU_QDNly1sC"); err != nil {
+		t.Fatalf("admin add: %v", err)
+	}
+	out, err = runArgs(t, "admin", "list", "cave")
+	if err != nil {
+		t.Fatalf("admin list: %v", err)
+	}
+	if !strings.Contains(out, "KU_QDNly1sC") || !strings.Contains(out, "full") {
+		t.Errorf("admin list output = %q", out)
+	}
+
+	path := filepath.Join(os.Getenv("GAMEHOST_HOME"), "servers", "cave", "data", "gamehost", "cave", "adminlist.txt")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read adminlist: %v", err)
+	}
+	if string(data) != "KU_QDNly1sC\n" {
+		t.Errorf("adminlist.txt = %q", data)
+	}
+
+	if _, err := runArgs(t, "admin", "remove", "cave", "KU_QDNly1sC"); err != nil {
+		t.Fatalf("admin remove: %v", err)
+	}
+	out, err = runArgs(t, "admin", "list", "cave")
+	if err != nil {
+		t.Fatalf("admin list after remove: %v", err)
+	}
+	if strings.Contains(out, "KU_QDNly1sC") {
+		t.Errorf("admin list still shows the removed id: %q", out)
+	}
+
+	// The lobby reaches the same list through its own adapter.
+	if _, err := lobbyAdminAdd("cave", "KU_abc12345", "", false); err != nil {
+		t.Fatalf("lobbyAdminAdd: %v", err)
+	}
+	list, err := lobbyAdmins("cave")
+	if err != nil {
+		t.Fatalf("lobbyAdmins: %v", err)
+	}
+	if len(list) != 1 || list[0].SteamID != "KU_abc12345" || list[0].Privileges != "full" {
+		t.Fatalf("lobbyAdmins = %#v", list)
+	}
+	if _, err := lobbyAdminRemove("cave", "KU_abc12345"); err != nil {
+		t.Fatalf("lobbyAdminRemove: %v", err)
+	}
+
+	// Project Zomboid has no admin list yet, and that is an error, not a crash.
+	if _, err := runArgs(t, "create", "zomboid", "--game", "projectzomboid", "--admin-password", "secret"); err != nil {
+		t.Fatalf("create zomboid: %v", err)
+	}
+	if _, err := runArgs(t, "admin", "list", "zomboid"); err == nil {
+		t.Fatal("admin list accepted Project Zomboid")
+	}
+}
+
+// covers the Project Zomboid mod list end to end
+func TestModsCommands(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "zomboid", "--game", "projectzomboid", "--world-name", "base", "--admin-password", "secret"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	ini := filepath.Join(os.Getenv("GAMEHOST_HOME"), "servers", "zomboid", "data", "Server", "base.ini")
+	if err := os.MkdirAll(filepath.Dir(ini), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := "PVP=true\nWorkshopItems=\nMods=\nMaxPlayers=16\n"
+	if err := os.WriteFile(ini, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runArgs(t, "mods", "add", "zomboid", "1234567890", "--workshop"); err != nil {
+		t.Fatalf("mods add workshop: %v", err)
+	}
+	if _, err := runArgs(t, "mods", "add", "zomboid", "Hydrocraft"); err != nil {
+		t.Fatalf("mods add mod: %v", err)
+	}
+
+	out, err := runArgs(t, "mods", "list", "zomboid")
+	if err != nil {
+		t.Fatalf("mods list: %v", err)
+	}
+	for _, want := range []string{"1234567890", "Hydrocraft"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("mods list missing %q:\n%s", want, out)
+		}
+	}
+
+	data, err := os.ReadFile(ini)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	for _, want := range []string{"PVP=true", "WorkshopItems=1234567890", "Mods=Hydrocraft", "MaxPlayers=16"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("ini lacks %q:\n%s", want, got)
+		}
+	}
+
+	if _, err := runArgs(t, "mods", "remove", "zomboid", "Hydrocraft"); err != nil {
+		t.Fatalf("mods remove: %v", err)
+	}
+	data, err = os.ReadFile(ini)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "Hydrocraft") {
+		t.Errorf("mods remove left the id:\n%s", data)
+	}
+
+	if _, err := runArgs(t, "create", "corekeeper"); err != nil {
+		t.Fatalf("create corekeeper: %v", err)
+	}
+	if _, err := runArgs(t, "mods", "list", "corekeeper"); err == nil {
+		t.Fatal("mods list accepted Core Keeper")
+	}
+}
+
 // covers adding, listing and removing admins
 func TestAdminCommands(t *testing.T) {
 	t.Setenv("GAMEHOST_HOME", t.TempDir())

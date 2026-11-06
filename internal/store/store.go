@@ -98,7 +98,8 @@ func (s *Store) Save(inst instance.Instance) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create instance directory: %w", err)
 	}
-	if err := atomicfile.Replace(path, data, 0o644); err != nil {
+	// The configuration can hold a cluster token, so it stays private.
+	if err := atomicfile.Replace(path, data, 0o600); err != nil {
 		return fmt.Errorf("save instance %q: %w", inst.Name, err)
 	}
 	return nil

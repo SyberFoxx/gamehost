@@ -8,8 +8,9 @@
 
 [![CI](https://github.com/SyberFoxx/gamehost/actions/workflows/ci.yml/badge.svg)](https://github.com/SyberFoxx/gamehost/actions/workflows/ci.yml)
 
-Terminal-first manager for dedicated game servers, written in Go. The first supported game is
-**Core Keeper**: install, configure, run, inspect and back up a server for a small friend group.
+Terminal-first manager for dedicated game servers, written in Go. Supported games are
+**Core Keeper**, **Project Zomboid** and **Don't Starve Together**: install, configure, run,
+inspect and back up a server for a small friend group.
 
 The project is also a structured Go learning path. Every milestone adds one real capability and the
 language features it requires: `os/exec`, process groups, signals, atomic writes, `net/http`,
@@ -40,6 +41,9 @@ concurrency and tests with `-race`.
 | M11 | `service install` / `service uninstall`: systemd user units | done |
 | M12 | interactive lobby: banner, arrow-key menu, log screen | done |
 | M13 | lobby as the whole program: instances, files, backups, admins, systemd, panel | done |
+| M14 | Don't Starve Together driver: online and offline clusters, cluster files, token | done |
+| M15 | Caves shard for DST, Klei admins from the terminal and the lobby | done |
+| M16 | Project Zomboid mods: workshop items and mod ids from the CLI and the lobby | done |
 
 ## Features
 
@@ -56,7 +60,10 @@ concurrency and tests with `-race`.
   previous data as a pre-restore backup.
 - Serves a small web panel and a JSON API with live status, start/stop controls and an SSE log
   stream, embedding the page in the binary.
-- Runs two games behind one driver interface: Core Keeper and Project Zomboid.
+- Runs three games behind one driver interface: Core Keeper, Project Zomboid and Don't Starve
+  Together (online with a Klei token, or LAN-only offline).
+- Runs the Don't Starve Together surface world and its Caves shard as one instance: one start, one
+  stop and one backup cover both processes.
 - Imports an existing `.world.gzip` save into an instance, archiving the current world first.
 - Holds a per-instance lock, so two servers or a backup and a start can never share one world.
 - Keeps the newest ten run logs and prunes the rest.
@@ -64,8 +71,8 @@ concurrency and tests with `-race`.
 - Lists, creates and restores backups from the API and the panel, not only the terminal.
 - Runs an opt-in backup window: `serve` owns it, or `service install` writes a systemd timer that
   stops, archives, prunes and starts the server again.
-- Edits the Core Keeper admin list from the terminal, with Steam ID validation and the server's
-  own file shape.
+- Edits the admin list from the terminal or the lobby: Core Keeper Steam IDs in `Admins.json`, and
+  Klei IDs (`KU_...`) in Don't Starve Together `adminlist.txt`.
 - Starts instances when the daemon boots, so one systemd unit brings the server back after a
   reboot.
 - Writes its own systemd user units: the server with restart-on-crash, and a timer for the backup
@@ -220,6 +227,7 @@ usable.
 | Logs | newest tail, then follows live; `G` returns to the live edge and `n` reloads with another tail size | `logs -f`, `logs -n` |
 | Backups | `b` archives after asking the retention, `Enter` restores, `i` imports a `.world.gzip` | `backup --keep`, `restore`, `import-world` |
 | Admins | `a` adds, `d` removes, both only while stopped | `admin add`, `admin remove` |
+| Mods | Project Zomboid only: `a` adds a mod id, `w` a workshop item, `d` removes | `mods add`, `mods remove` |
 | Systemd | `i` writes the units, `e` also enables them, `u` removes them, `a` edits `--dir`, `--binary` and `--systemctl` | `service install`, `service uninstall` |
 | Environment | every `doctor` check with its status, the build version and a verdict | `doctor`, `version` |
 | Web panel | starts the panel on `127.0.0.1:8080` with the backup schedule, `b` picks an instance to start with it, `Esc` stops it | `serve`, `serve --start` |
@@ -277,6 +285,22 @@ gamehost config corekeeper                     # print what the launcher will us
 gamehost config corekeeper --max-players 5 --backup-every 24h
 ```
 
+Don't Starve Together needs a cluster token to be listed publicly; without one, run the cluster on
+the LAN:
+
+```bash
+gamehost create cave --game dontstarvetogether --offline --max-players 4 --world-name "Night Owls"
+gamehost install cave
+gamehost start cave --detach
+
+# online, with the token from https://accounts.klei.com
+gamehost create online --game dontstarvetogether --cluster-token 'pds-g^KU_...'
+```
+
+The cluster files are created under `data/gamehost/<name>/` (`cluster.ini`, `Master/server.ini` and,
+when online, `cluster_token.txt` with mode `0600`), and the driver creates them only when they are
+missing: after the first start, `cluster.ini` belongs to you and the server.
+
 It refuses while the server runs, because the server reads these values at launch. The world index
 is fixed after creation; `--world-name` only changes the label players see, not the save. The seed
 matters while a world is generated, so changing it on an existing save does nothing. For Project
@@ -326,6 +350,27 @@ gamehost start corekeeper --detach
 A Steam ID64 is the 17-digit number that starts with `7656119`. `full` (privileges `2`) can use
 every admin command; `--limited` stores privileges `1`, the level the game marks as limited.
 `admin list` works while the server runs; `add` and `remove` refuse until it is stopped.
+
+Project Zomboid loads mods from its ini. Manage the two lists without editing the file:
+
+```bash
+gamehost stop zomboid
+gamehost mods add zomboid 2200148440 --workshop
+gamehost mods add zomboid Hydrocraft
+gamehost mods list zomboid
+gamehost mods remove zomboid Hydrocraft
+gamehost start zomboid --detach
+```
+
+`mods add` and `mods remove` rewrite only the `WorkshopItems=` and `Mods=` lines and leave the rest
+of the ini byte for byte; `mods list` works while the server runs. The lobby has the same screen
+under `Mods`.
+
+Don't Starve Together uses the same commands with the Klei user id that the game shows (`KU_...`).
+The driver writes one id per line to `data/gamehost/<name>/adminlist.txt`; names and limited
+privileges do not exist there, so the driver ignores a display name and rejects `--limited`. The
+lobby reaches the same list with `a` and `d`, so a server can be administered without entering the
+game.
 
 ### Running it as a systemd user service
 
@@ -419,6 +464,12 @@ gamehost start zomboid --detach
 Project Zomboid has no join code: `status` reports the UDP port to add in the Favorites tab, and
 max players and the join password stay in `data/Server/base.ini`.
 
+Don't Starve Together uses the same commands; `--offline` runs a LAN cluster without a Klei token,
+while an online cluster takes `--cluster-token`. `status` reports the `cluster_name` players see in
+the server browser, and gamehost writes `cluster.ini`/`Master/server.ini` under
+`data/gamehost/<name>/` the first time. Add `--caves` to run the underground shard too: it uses the
+next UDP port and is stopped together with the surface world.
+
 ## Verifying a real Core Keeper server
 
 The test suite stops at the SteamCMD download. Once per machine, walk the whole path:
@@ -471,9 +522,12 @@ a command would have failed the check.
 | `gamehost import-world <name> <file>` | copy an existing `.world.gzip` save into the instance slot (stopped only) |
 | `gamehost backup <name> [-keep N]` | archive `data/`, keeping the newest `N` (default 5) |
 | `gamehost restore <name> <archive>` | replace `data/` from a backup, after saving the current one |
-| `gamehost admin list <name>` | print the admins stored in `data/Admins.json` |
-| `gamehost admin add <name> <steamid> [--name NAME] [--limited]` | grant admin rights (stopped only) |
-| `gamehost admin remove <name> <steamid>` | drop admin rights (stopped only) |
+| `gamehost admin list <name>` | print the admin list of the game |
+| `gamehost admin add <name> <id> [--name NAME] [--limited]` | grant admin rights; Steam ID or `KU_...` id (stopped only) |
+| `gamehost admin remove <name> <id>` | drop admin rights (stopped only) |
+| `gamehost mods list <name>` | print the workshop items and mod ids (Project Zomboid) |
+| `gamehost mods add <name> <id> [--workshop]` | add a mod id or workshop item (stopped only) |
+| `gamehost mods remove <name> <id> [--workshop]` | drop a mod id or workshop item (stopped only) |
 | `gamehost serve [--addr]` | serve the HTTP API and web panel (default `127.0.0.1:8080`) |
 | `gamehost serve --start <name>` | start that instance when the daemon boots; repeatable |
 | `gamehost service install <name> [--enable]` | write the systemd user units, optionally enabling and starting them |
@@ -487,16 +541,19 @@ a command would have failed the check.
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--game` | `corekeeper` | `corekeeper` or `projectzomboid` |
-| `--max-players` | `8` | player limit, 1–8 (Core Keeper only) |
-| `--world-name` | per game | world name, or the Project Zomboid server name (lowercase letters, digits, `-` and `_`) |
+| `--game` | `corekeeper` | `corekeeper`, `projectzomboid` or `dontstarvetogether` |
+| `--max-players` | `8` | player limit, 1–8 (Core Keeper) or 1–64 (Don't Starve Together) |
+| `--world-name` | per game | world name, Project Zomboid server name (lowercase letters, digits, `-` and `_`) or DST `cluster_name` |
 | `--seed` | random | world seed, only used on first creation (Core Keeper only) |
 | `--mode` | `normal` | `normal`, `hard`, `creative` or `casual` (Core Keeper only) |
-| `--port` | `0` | direct-connect port; `0` keeps the Steam relay (Core Keeper) or uses `16261` (Project Zomboid) |
+| `--port` | `0` | direct-connect port; `0` keeps the Steam relay (Core Keeper), uses `16261` (Project Zomboid) or `10999` (Don't Starve Together) |
 | `--udp-port` | game port + 1 | Project Zomboid direct port (Project Zomboid only) |
 | `--password` | none | join password, at most 28 characters (Core Keeper only) |
 | `--admin-password` | required | Project Zomboid admin password (Project Zomboid only) |
 | `--game-id` | generated | fixed game ID, 15–28 characters without `Y y x 0 O` (Core Keeper only) |
+| `--cluster-token` | none | Klei token from `accounts.klei.com` (Don't Starve Together online only) |
+| `--offline` | `false` | LAN-only cluster without a Klei token (Don't Starve Together only) |
+| `--caves` | `false` | run the Caves shard next to the surface world (Don't Starve Together only) |
 | `--backup-every` | off | scheduled backup interval such as `24h`; needs `gamehost serve` running |
 | `--backup-keep` | `5` | scheduled archives to keep, oldest removed first |
 
@@ -562,6 +619,7 @@ graph TD
 | `internal/games` | game name to driver registry |
 | `internal/corekeeper` | Core Keeper launch arguments and join information |
 | `internal/projectzomboid` | Project Zomboid install, launch and join information |
+| `internal/dontstarvetogether` | Don't Starve Together install, cluster files, launch and join information |
 | `internal/steamcmd` | locating and running SteamCMD |
 | `internal/doctor` | environment probes |
 | `internal/httpapi` | JSON API, SSE log stream and embedded panel |
@@ -621,6 +679,9 @@ The repository never contains generated data.
 | Assert dump after `stop` during startup | the world is still generating | wait for `Started session` in `gamehost logs -f` before stopping |
 | Friends cannot join a Project Zomboid server | ports `16261` and `16262` stay UDP | forward both, and allow them in the firewall |
 | `start-server.sh: Permission denied` | SteamCMD kept the script without the execute bit | `chmod +x files/start-server.sh` |
+| Don't Starve Together exits `127` with `libcurl-gnutls.so.4` | Fedora and Nobara ship only the OpenSSL curl | provide the gnutls soname on the loader path, or use a distribution that packages it |
+| Don't Starve Together refuses to start an offline cluster | its UDP port must be 10998–11018 | `gamehost config <name> --port 10999` |
+| Caves crashes the whole instance | the Caves shard could not read its ini, or its port is taken | check `Caves/server.ini` and that `port + 1` is free |
 | `backup`, `restore` or `update` refuses to run | the server holds the world files | `gamehost stop <name>` first |
 | `instance is already running` or `instance is in use by another gamehost command` | the server, or a command between its check and its state write, holds `run.lock` | wait for it, or `gamehost stop <name>` if a server was left behind |
 | A scheduled backup never runs | `serve` is not running, or the interval has not elapsed since the newest archive | keep `gamehost serve` running and watch its output |
@@ -639,6 +700,9 @@ make fmt     # gofmt -l -w .
 The full design, the verified Core Keeper launch contract and the decision log live in
 [docs/design.md](docs/design.md). Working conventions for agents and contributors live in
 [AGENTS.md](AGENTS.md).
+
+A complete user manual in Spanish, from installing the binary to opening the TUI and administering
+every game, lives in [docs/manual.md](docs/manual.md).
 
 ## Design decisions
 

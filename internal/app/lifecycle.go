@@ -78,6 +78,12 @@ func prepareStart(s *store.Store, inst instance.Instance) (game.Launch, string, 
 		return game.Launch{}, "", fmt.Errorf("start instance %q: server is not installed, run: gamehost install %s: %w", inst.Name, inst.Name, err)
 	}
 
+	// A driver that keeps its settings in files of its own writes them here,
+	// before the launch, so the server never reads a stale cluster.
+	if err := prepareRuntime(driver, inst); err != nil {
+		return game.Launch{}, "", err
+	}
+
 	// Validate the launch contract before a process exists.
 	launch, err := driver.Runner.Launch(inst)
 	if err != nil {
@@ -85,6 +91,18 @@ func prepareStart(s *store.Store, inst instance.Instance) (game.Launch, string, 
 	}
 	logPath := filepath.Join(s.Layout(inst.Name).Logs, time.Now().Format("2006-01-02_15-04-05")+".log")
 	return launch, logPath, nil
+}
+
+// prepareRuntime lets a driver write the files its server reads at startup.
+func prepareRuntime(driver game.Registration, inst instance.Instance) error {
+	preparer, ok := driver.Runner.(game.Preparer)
+	if !ok {
+		return nil
+	}
+	if err := preparer.Prepare(inst); err != nil {
+		return fmt.Errorf("start instance %q: %w", inst.Name, err)
+	}
+	return nil
 }
 
 // startDetached re-executes gamehost as a supervisor in a new session.
@@ -158,14 +176,32 @@ func serve(ctx context.Context, s *store.Store, inst instance.Instance, launch g
 	}
 	defer func() { _ = lock.Release() }()
 
-	server, err := process.Start(process.Spec{
+	startSpec := process.Spec{
 		Path: launch.Path,
 		Args: launch.Args,
 		Dir:  launch.Dir,
 		Out:  out,
-	})
+	}
+	server, err := process.Start(startSpec)
 	if err != nil {
 		return fmt.Errorf("start instance %q: %w", inst.Name, err)
+	}
+
+	// Extra shards join the primary process group, so the pid in state.json and
+	// every stop signal cover the whole instance, not only the surface world.
+	servers := []*process.Server{server}
+	for _, extra := range launch.Extra {
+		shard, err := process.StartJoined(process.Spec{
+			Path: extra.Path,
+			Args: extra.Args,
+			Dir:  extra.Dir,
+			Out:  out,
+		}, server.PID())
+		if err != nil {
+			_ = process.Stop(server.PID(), stopGrace)
+			return fmt.Errorf("start instance %q: %w", inst.Name, err)
+		}
+		servers = append(servers, shard)
 	}
 
 	startedAt := time.Now()
@@ -182,8 +218,23 @@ func serve(ctx context.Context, s *store.Store, inst instance.Instance, launch g
 	} else {
 		fmt.Fprintf(out, "supervising %s (pid %d)\n", inst.Name, server.PID())
 	}
+	for _, shard := range servers[1:] {
+		fmt.Fprintf(out, "supervising the caves shard (pid %d)\n", shard.PID())
+	}
 
-	res := server.WaitContext(ctx, stopGrace)
+	// One shard dying takes the instance down: a surface world without caves
+	// would silently swallow every portal, so stop the rest and report it.
+	results := make(chan process.Result, len(servers))
+	for _, shard := range servers {
+		go func(shard *process.Server) { results <- shard.WaitContext(ctx, stopGrace) }(shard)
+	}
+	res := <-results
+	for range servers[1:] {
+		if anyAlive(servers) {
+			_ = process.Stop(server.PID(), stopGrace)
+		}
+		res = mergeShardResults(res, <-results)
+	}
 
 	// A stop requested from another terminal is a clean stop even when the
 	// server aborts on the way out; only an unrequested failure is a crash.
@@ -217,6 +268,29 @@ func serve(ctx context.Context, s *store.Store, inst instance.Instance, launch g
 	return nil
 }
 
+// anyAlive reports whether any shard of an instance still runs.
+func anyAlive(servers []*process.Server) bool {
+	for _, shard := range servers {
+		if process.Alive(shard.PID()) {
+			return true
+		}
+	}
+	return false
+}
+
+// mergeShardResults folds the exit of one shard into the instance result.
+// A shard that failed without being asked to stop is the interesting one.
+func mergeShardResults(res, other process.Result) process.Result {
+	if other.Duration > res.Duration {
+		res.Duration = other.Duration
+	}
+	if !other.Stopped && other.ExitCode != 0 {
+		res.ExitCode = other.ExitCode
+		res.Stopped = false
+	}
+	return res
+}
+
 // runSupervise is the hidden half of start --detach: one instance, one session.
 func runSupervise(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := newFlagSet("__supervise", stderr)
@@ -238,6 +312,11 @@ func runSupervise(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	}
 	driver, err := games.Lookup(inst.Game)
 	if err != nil {
+		return err
+	}
+	// The parent prepared the cluster before re-execing, but the hidden command
+	// must also stand on its own when it is the entry point.
+	if err := prepareRuntime(driver, inst); err != nil {
 		return err
 	}
 	launch, err := driver.Runner.Launch(inst)
@@ -298,6 +377,14 @@ func stopInstance(s *store.Store, inst instance.Instance, stdout io.Writer) erro
 	fmt.Fprintf(stdout, "stopping %s (pid %d), waiting up to %s\n", inst.Name, state.PID, stopGrace)
 	if err := process.Stop(state.PID, stopGrace); err != nil {
 		return fmt.Errorf("stop instance %q: %w", inst.Name, err)
+	}
+
+	// The Master is gone, but a second shard may still be exiting. Waiting for
+	// the group keeps the lock free by the time stop returns, so the next
+	// command never races the supervisor.
+	deadline := time.Now().Add(stopGrace)
+	for process.GroupAlive(state.PID) && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	// The supervisor records the same phase; writing here keeps `stop` honest

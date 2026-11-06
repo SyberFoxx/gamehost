@@ -126,6 +126,52 @@ func TestNew(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name:  "dont starve together defaults",
+			input: "cave",
+			opts: Options{
+				Game:         GameDontStarveTogether,
+				MaxPlayers:   6,
+				ClusterToken: "pds-g^KU_test",
+				InstallDir:   "/srv/files",
+				DataDir:      "/srv/data",
+			},
+			assert: func(t *testing.T, got Instance) {
+				if got.Network.Mode != NetworkOnline || got.Network.Port != DontStarveTogetherPort {
+					t.Errorf("Network = %+v, want online on %d", got.Network, DontStarveTogetherPort)
+				}
+				if got.World.Name != "Don't Starve Together" {
+					t.Errorf("World.Name = %q, want the default", got.World.Name)
+				}
+			},
+		},
+		{
+			name:  "dont starve together online without a token",
+			input: "cave",
+			opts: Options{
+				Game:       GameDontStarveTogether,
+				MaxPlayers: 6,
+				InstallDir: "/srv/files",
+				DataDir:    "/srv/data",
+			},
+			wantErr: true,
+		},
+		{
+			name:  "dont starve together offline needs no token",
+			input: "lan",
+			opts: Options{
+				Game:       GameDontStarveTogether,
+				MaxPlayers: 6,
+				Offline:    true,
+				InstallDir: "/srv/files",
+				DataDir:    "/srv/data",
+			},
+			assert: func(t *testing.T, got Instance) {
+				if got.Network.Mode != NetworkOffline {
+					t.Errorf("Network.Mode = %q, want offline", got.Network.Mode)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -182,6 +228,74 @@ func TestBackupSettings(t *testing.T) {
 	}
 }
 
+// covers the Don't Starve Together cluster rules.
+func TestValidateDontStarveTogether(t *testing.T) {
+	base := Instance{
+		Name:         "cave",
+		Game:         GameDontStarveTogether,
+		InstallDir:   "/srv/files",
+		DataDir:      "/srv/data",
+		World:        World{Name: "Night Owls"},
+		Network:      Network{Mode: NetworkOnline, Port: DontStarveTogetherPort},
+		MaxPlayers:   8,
+		ClusterToken: "pds-g^KU_test",
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(inst Instance) Instance
+		wantErr bool
+	}{
+		{"valid online", func(i Instance) Instance { return i }, false},
+		{"missing token", func(i Instance) Instance { i.ClusterToken = ""; return i }, true},
+		{"token with a space", func(i Instance) Instance { i.ClusterToken = "pds g"; return i }, true},
+		{"offline without a token", func(i Instance) Instance {
+			i.Network.Mode = NetworkOffline
+			i.ClusterToken = ""
+			return i
+		}, false},
+		{"offline outside the LAN range", func(i Instance) Instance {
+			i.Network.Mode = NetworkOffline
+			i.Network.Port = 12000
+			return i
+		}, true},
+		{"zero players", func(i Instance) Instance { i.MaxPlayers = 0; return i }, true},
+		{"too many players", func(i Instance) Instance { i.MaxPlayers = 65; return i }, true},
+		{"empty cluster name", func(i Instance) Instance { i.World.Name = ""; return i }, true},
+		{"cluster name with a newline", func(i Instance) Instance { i.World.Name = "a\nb"; return i }, true},
+		{"cluster name with an equals sign", func(i Instance) Instance { i.World.Name = "a=b"; return i }, true},
+		{"cluster name too long", func(i Instance) Instance { i.World.Name = strings.Repeat("a", 65); return i }, true},
+		{"core keeper seed", func(i Instance) Instance { i.World.Seed = "abc"; return i }, true},
+		{"core keeper game id", func(i Instance) Instance { i.GameID = "abcdef1234567891"; return i }, true},
+		{"admin password", func(i Instance) Instance { i.AdminPassword = "secret"; return i }, true},
+		{"join password", func(i Instance) Instance { i.Network.Password = "secret"; return i }, true},
+		{"udp port", func(i Instance) Instance { i.Network.UDPPort = 16262; return i }, true},
+		{"caves online", func(i Instance) Instance { i.Caves = true; return i }, false},
+		{"caves above the port range", func(i Instance) Instance {
+			i.Caves = true
+			i.Network.Port = 65535
+			return i
+		}, true},
+		{"offline caves above the LAN range", func(i Instance) Instance {
+			i.Network.Mode = NetworkOffline
+			i.Network.Port = 11018
+			i.Caves = true
+			return i
+		}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := tt.mutate(base).Validate()
+			if gotErr := err != nil; gotErr != tt.wantErr {
+				t.Fatalf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 // covers the game ID and password limits
 func TestValidate(t *testing.T) {
 	base := Instance{
@@ -209,6 +323,7 @@ func TestValidate(t *testing.T) {
 		{"negative world index", func(i Instance) Instance { i.World.Index = -1; return i }, true},
 		{"udp port", func(i Instance) Instance { i.Network.UDPPort = 16262; return i }, true},
 		{"admin password", func(i Instance) Instance { i.AdminPassword = "secret"; return i }, true},
+		{"caves shard", func(i Instance) Instance { i.Caves = true; return i }, true},
 		{"scheduled backup", func(i Instance) Instance { i.Backup = Backup{Every: "24h", Keep: 3}; return i }, false},
 		{"short backup interval", func(i Instance) Instance { i.Backup = Backup{Every: "1s", Keep: 3}; return i }, true},
 		{"backup interval without a duration", func(i Instance) Instance { i.Backup = Backup{Every: "daily", Keep: 3}; return i }, true},
