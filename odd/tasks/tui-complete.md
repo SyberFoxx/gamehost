@@ -136,3 +136,12 @@ Work units follow the task table. PR slices, in `feature-branch-chain` order:
   screen owns the terminal.
 - **L12** — `gofmt -l .`, `go vet ./...` and `go test -race ./...` are clean; the documents carry the
   measured install, update and smoke-test facts instead of estimates.
+- **L13** — Window question, answered by measurement: with `-batchmode` the verified build starts
+  with no X window. `wmctrl`, `xdotool` and `xwininfo` found nothing while polling every 500 ms for
+  the first 20 s and while the server ran; the session still reached
+  `Started session with info: K85KQswu7GWLsQB`. The earlier note that a window opens was wrong for
+  this build, so README, design and AGENTS now say what was measured and keep the `DISPLAY` export
+  and Xvfb guidance as a guard for other builds.
+- **L14** — Real `start`/`stop` through the lobby: the confirmation, the clean save and the stopped
+  phase all worked against the running server, which exited `0` after 1m46s. That closes the TUI
+  lifecycle check that the earlier smoke run left open.

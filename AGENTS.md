@@ -79,7 +79,9 @@ Candidates, easiest first:
 - `GameInfo.txt` and `GameID.txt` live in the install directory, not in the data directory.
 - World saves are `<datapath>/worlds/<index>.world.gzip`; the server also writes
   `ServerConfig.json`, `Admins.json` and `PlayerBans.json` there, with `.pugbackup` copies.
-- The server needs a graphics display even with `-batchmode`: on a desktop it opens a window.
+- The verified Core Keeper build (2026-11-06) starts with `-batchmode` and opens no window; two
+  polls of the X session during startup and one while running found nothing. Keep `-batchmode` and
+  the `DISPLAY` export anyway: a build that initializes graphics needs both.
 - SteamCMD ships a 32-bit client (`linux32/steamcmd`); a minimal distribution without 32-bit
   runtime libraries fails before reaching its prompt.
 - SteamCMD self-updates on every invocation; do not treat output as silence or assume fast startup.
@@ -120,9 +122,9 @@ Candidates, easiest first:
   the loop, or `service install` can write a systemd timer for it; never both on one instance. A
   failed archive must still restart the server, so the timer restarts in `ExecStopPost`, never in
   `ExecStartPost`. `--backup-every` is off by default.
-- Core Keeper opens a window even with `-batchmode`. The systemd unit exports the `DISPLAY` it was
-  installed from; a headless boot needs `Xvfb` and `DISPLAY=:99 gamehost service install ...`, or
-  the unit fails before the server reaches its log.
+- The systemd unit exports the `DISPLAY` it was installed from. The verified build opens no window
+  with `-batchmode`, but an older or future one may, and a headless boot then needs `Xvfb` plus
+  `DISPLAY=:99 gamehost service install ...` or the unit fails before reaching its log.
 - `service install` renders the units with `internal/service` and is the only caller of
   `systemctl`. Unit files are rendered text: escape `%` and `$`, quote paths with spaces, and keep
   `KillMode=mixed` so gamehost owns the game's shutdown instead of systemd signaling the whole
