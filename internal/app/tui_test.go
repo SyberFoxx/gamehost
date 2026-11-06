@@ -2,9 +2,15 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/syberfoxx/gamehost/internal/instance"
+	"github.com/syberfoxx/gamehost/internal/tui"
 )
 
 // covers the gate that decides between the lobby and the usage text
@@ -76,7 +82,7 @@ func TestLobbyItems(t *testing.T) {
 }
 
 // covers reading the newest log through the lobby adapter
-func TestLobbyLogs(t *testing.T) {
+func TestLobbyFollow(t *testing.T) {
 	t.Setenv("GAMEHOST_HOME", t.TempDir())
 
 	if _, err := runArgs(t, "create", "partidita"); err != nil {
@@ -96,13 +102,27 @@ func TestLobbyLogs(t *testing.T) {
 		t.Fatalf("write log: %v", err)
 	}
 
-	lines, err := lobbyLogs("partidita", 100)
-	if err != nil {
-		t.Fatalf("lobbyLogs: %v", err)
-	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := lobbyFollow(ctx, "partidita", 100)
+
 	want := []string{"boot", "world loaded", "ready"}
-	if len(lines) != len(want) {
-		t.Fatalf("got %d lines, want %d: %q", len(lines), len(want), lines)
+	var lines []string
+	for len(lines) < len(want) {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				t.Fatalf("the stream closed after %q", lines)
+			}
+			if event.Err != nil {
+				t.Fatalf("follow: %v", event.Err)
+			}
+			if event.Line != "" {
+				lines = append(lines, event.Line)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out after %q", lines)
+		}
 	}
 	for i := range want {
 		if lines[i] != want[i] {
@@ -112,19 +132,112 @@ func TestLobbyLogs(t *testing.T) {
 }
 
 // covers the empty-log path the lobby shows as a hint
-func TestLobbyLogsWithoutLogFiles(t *testing.T) {
+func TestLobbyFollowWithoutLogFiles(t *testing.T) {
 	t.Setenv("GAMEHOST_HOME", t.TempDir())
 
 	if _, err := runArgs(t, "create", "partidita"); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
-	lines, err := lobbyLogs("partidita", 100)
-	if err != nil {
-		t.Fatalf("lobbyLogs: %v", err)
+	events := lobbyFollow(context.Background(), "partidita", 100)
+
+	var lines []string
+	for event := range events {
+		if event.Err != nil {
+			t.Fatalf("follow: %v", event.Err)
+		}
+		if event.Line != "" {
+			lines = append(lines, event.Line)
+		}
 	}
-	if lines != nil {
-		t.Fatalf("got %q, want no lines", lines)
+	if len(lines) != 1 || !strings.Contains(lines[0], "start it first") {
+		t.Fatalf("got %q, want one hint line", lines)
+	}
+}
+
+// covers the settings round trip the lobby uses to read and save a form
+func TestSettingsRoundTrip(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t,
+		"create", "partidita",
+		"--max-players", "4",
+		"--world-name", "Party",
+		"--mode", "hard",
+		"--password", "secret",
+		"--backup-every", "24h",
+		"--backup-keep", "3",
+	); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	s, inst, err := loadInstance("partidita")
+	if err != nil {
+		t.Fatalf("loadInstance: %v", err)
+	}
+
+	settings := settingsOf(inst)
+	if settings.MaxPlayers != "4" || settings.WorldName != "Party" || settings.Mode != "hard" {
+		t.Fatalf("settings = %#v", settings)
+	}
+	if settings.Password != "secret" || settings.BackupEvery != "24h" || settings.BackupKeep != "3" {
+		t.Fatalf("settings = %#v", settings)
+	}
+
+	opts, err := updateOptions(inst, settings)
+	if err != nil {
+		t.Fatalf("updateOptions: %v", err)
+	}
+	if opts.InstallDir != s.Layout(inst.Name).Files || opts.DataDir != s.Layout(inst.Name).Data {
+		t.Fatalf("updateOptions lost the directories: %#v", opts)
+	}
+
+	updated, err := instance.New(inst.Name, opts)
+	if err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	if updated.MaxPlayers != 4 || updated.World.Name != "Party" || updated.World.Mode != instance.ModeHard {
+		t.Fatalf("rebuilt instance = %#v", updated)
+	}
+}
+
+// covers the validation the two option parsers share
+func TestCreateOptionsRejectsBadValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		settings tui.Settings
+	}{
+		{"unknown game", tui.Settings{Game: "doom"}},
+		{"bad mode", tui.Settings{Game: instance.GameCoreKeeper, Mode: "insane"}},
+		{"bad players", tui.Settings{Game: instance.GameCoreKeeper, MaxPlayers: "many"}},
+		{"bad port", tui.Settings{Game: instance.GameProjectZomboid, Port: "http"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := createOptions(tt.settings); err == nil {
+				t.Fatalf("createOptions accepted %#v", tt.settings)
+			}
+		})
+	}
+}
+
+// covers the empty values a form sends back for a Core Keeper instance
+func TestCreateOptionsDefaults(t *testing.T) {
+	t.Parallel()
+
+	opts, err := createOptions(tui.Settings{Game: instance.GameCoreKeeper})
+	if err != nil {
+		t.Fatalf("createOptions: %v", err)
+	}
+	if opts.Mode != instance.ModeNormal {
+		t.Fatalf("mode = %q, want normal", opts.Mode)
+	}
+	if opts.BackupEvery != "" {
+		t.Fatalf("backup every = %q, want off", opts.BackupEvery)
 	}
 }
 

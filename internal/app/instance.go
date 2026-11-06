@@ -7,6 +7,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/syberfoxx/gamehost/internal/instance"
+	"github.com/syberfoxx/gamehost/internal/store"
 )
 
 // runCreate writes a new instance configuration.
@@ -35,17 +36,10 @@ func runCreate(args []string, stdout, stderr io.Writer) error {
 	if err := instance.ValidateName(name); err != nil {
 		return err
 	}
-	s, err := openStore()
-	if err != nil {
-		return err
-	}
 
-	layout := s.Layout(name)
 	opts := instance.Options{
-		Game:       *gameName,
-		WorldName:  *worldName,
-		InstallDir: layout.Files,
-		DataDir:    layout.Data,
+		Game:      *gameName,
+		WorldName: *worldName,
 	}
 	set := setFlags(fs)
 	if err := rejectForeignFlags("create", *gameName, set); err != nil {
@@ -78,16 +72,49 @@ func runCreate(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("create: unknown game %q: %w", *gameName, ErrUsage)
 	}
 
-	inst, err := instance.New(name, opts)
+	inst, err := createInstance(name, opts)
 	if err != nil {
-		return err
-	}
-	if err := s.Create(inst); err != nil {
 		return err
 	}
 
 	fmt.Fprintf(stdout, "created instance %q\n  files: %s\n  data:  %s\n", inst.Name, inst.InstallDir, inst.DataDir)
 	return nil
+}
+
+// createInstance resolves the layout and writes a new instance.
+func createInstance(name string, opts instance.Options) (instance.Instance, error) {
+	if err := instance.ValidateName(name); err != nil {
+		return instance.Instance{}, err
+	}
+
+	s, err := openStore()
+	if err != nil {
+		return instance.Instance{}, err
+	}
+	layout := s.Layout(name)
+	opts.InstallDir = layout.Files
+	opts.DataDir = layout.Data
+
+	inst, err := instance.New(name, opts)
+	if err != nil {
+		return instance.Instance{}, err
+	}
+	if err := s.Create(inst); err != nil {
+		return instance.Instance{}, err
+	}
+	return inst, nil
+}
+
+// applySettings rebuilds an instance from changed options and stores it.
+func applySettings(s *store.Store, inst instance.Instance, opts instance.Options) (instance.Instance, error) {
+	updated, err := instance.New(inst.Name, opts)
+	if err != nil {
+		return instance.Instance{}, err
+	}
+	if err := s.Save(updated); err != nil {
+		return instance.Instance{}, err
+	}
+	return updated, nil
 }
 
 // rejectForeignFlags refuses flags that belong to the other game.
@@ -290,11 +317,8 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		opts.BackupKeep = *backupKeep
 	}
 
-	updated, err := instance.New(inst.Name, opts)
+	updated, err := applySettings(s, inst, opts)
 	if err != nil {
-		return err
-	}
-	if err := s.Save(updated); err != nil {
 		return err
 	}
 

@@ -66,6 +66,8 @@ Candidates, easiest first:
 - Fakes are hand-written against small interfaces.
 - The lobby is tested by sending messages to `Model.Update` and reading `View().Content`; no
   terminal and no golden files are needed, and no test may require a TTY.
+- A screen with a streamed backend is tested with a buffered channel the test fills and closes, then
+  by pumping `Update` until `Done`. Do not start a real SteamCMD or a real follower in a unit test.
 - Real SteamCMD or server runs use the `//go:build integration` tag and are not part of the
   default suite.
 
@@ -139,7 +141,19 @@ Candidates, easiest first:
   `permission denied` until it is `chmod +x`.
 - The lobby only opens when stdin and stdout are terminals, and the gate lives in `app.Run` so
   `main` stays a dispatcher. Do not move it into `main`, and keep the stdin check: a redirected
-  stdin would otherwise open an invisible UI.
+  stdin would otherwise open an invisible UI. The lobby is the front end of every command, but the
+  commands stay: systemd units, `serve` and scripts have no keyboard to press `Enter`.
+- `internal/tui` is a screen stack: each screen implements `Init`, `Update` and `View`, and the
+  root model owns navigation, the footer note, the help overlay and the confirm dialog. A new
+  capability is a new screen pushed by the lobby, not a field on the root model.
+- Long operations return a `<-chan tui.Event` and the screen redeems one event per command. Never
+  write to the model from a backend goroutine, and cancel the screen's context when it closes:
+  `Esc` on `Files` or `Logs` must stop the child SteamCMD or follower.
+- Forms send a `tui.Settings` of strings and `internal/app` parses it with the same helpers, defaults
+  and messages as `create` and `config`. Do not parse or validate in `internal/tui`.
+- The web panel screen starts the same handler `serve` uses and owns the stop function; the lobby
+  context shuts the listener down. `servePanel` is the only place that listener is created inside
+  the lobby.
 - `internal/tui` imports nothing from this project; it receives a `Backend` whose fields are
   functions. Do not import `store` or `instance` there, and never shell out to the `gamehost`
   binary: the adapter in `internal/app/tui.go` reuses `startDetached`, `stopInstance`,

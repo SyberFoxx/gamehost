@@ -43,10 +43,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return fmt.Errorf("listen on %s: %w", *addr, err)
 	}
 
-	server := &http.Server{
-		Handler:           httpapi.New(s, apiControl{}, apiMaintenance{}),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	server := newPanelServer(s)
 	// The daemon owns the schedule: a backup needs a stopped server, and only a
 	// long-running process can provide the window.
 	go newBackupScheduler(s, stdout).Run(ctx)
@@ -71,6 +68,14 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		_ = server.Close() // a stream that outlives the grace period is cut here
 	}
 	return nil
+}
+
+// newPanelServer builds the HTTP server the panel and serve share.
+func newPanelServer(s *store.Store) *http.Server {
+	return &http.Server{
+		Handler:           httpapi.New(s, apiControl{}, apiMaintenance{}),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 }
 
 // startBootInstances starts every instance named on the serve command line.

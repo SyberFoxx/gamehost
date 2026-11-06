@@ -2,340 +2,368 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
 
-// screen is the view the lobby is showing.
-type screen int
-
-const (
-	screenLobby screen = iota
-	screenLogs
-)
-
-// action is one entry of the lobby menu.
-type action int
-
-const (
-	actionStart action = iota
-	actionStop
-	actionLogs
-	actionBackup
-	actionStatus
-	actionQuit
-)
-
-// menu is the ordered list of actions the lobby offers.
-// Every entry names what it does, because the point of the lobby is teaching.
-var menu = []struct {
-	action action
-	label  string
-	hint   string
-}{
-	{actionStart, "Start", "run it in the background"},
-	{actionStop, "Stop", "wait for a clean save"},
-	{actionLogs, "Logs", "read the newest log"},
-	{actionBackup, "Backup", "archive the world"},
-	{actionStatus, "Status", "refresh phase, pid and join code"},
-	{actionQuit, "Quit", "leave the lobby"},
+// screen is one page of the lobby. Three methods keeps the contract inside the
+// project rule for small interfaces: the root owns navigation and each screen
+// owns its own state and drawing.
+type screen interface {
+	Init() tea.Cmd
+	Update(tea.Msg) (screen, tea.Cmd)
+	View(width, height int) string
 }
 
-// spinner is drawn while a backend call is in flight.
-var spinner = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+// keyser is a screen that can describe its own keys for the help overlay.
+type keyser interface {
+	Keys() []KeyHelp
+}
 
-// tickMsg advances the spinner.
+// textScreener is a screen editing text, where ? is a character and not the
+// help shortcut.
+type textScreener interface {
+	editingText() bool
+}
+
+// KeyHelp is one row of the help overlay.
+type KeyHelp struct {
+	Key    string
+	Action string
+	CLI    string
+}
+
+// pushMsg adds a screen to the stack.
+type pushMsg struct{ screen screen }
+
+// popMsg removes the top screen.
+type popMsg struct{}
+
+// resumeMsg tells a screen it is visible again after a child popped.
+type resumeMsg struct{}
+
+// quitMsg asks the root to leave the program.
+type quitMsg struct{}
+
+// statusMsg is one line of feedback for the bottom of the screen.
+type statusMsg struct {
+	text string
+	err  bool
+}
+
+// tickMsg advances a spinner.
 type tickMsg time.Time
 
-// listMsg carries the result of Backend.List.
+// listMsg carries a reloaded instance list.
 type listMsg struct {
 	items []Item
 	err   error
 }
 
-// resultMsg carries the outcome of a start, stop or backup.
+// resultMsg carries the outcome of one blocking server action.
 type resultMsg struct {
-	action action
-	text   string
+	text string
+	err  error
+}
+
+// detailMsg carries the full configuration of one instance.
+type detailMsg struct {
+	detail Detail
 	err    error
 }
 
-// logsMsg carries the newest log lines of one instance.
-type logsMsg struct {
-	lines []string
-	err   error
+// settingsMsg carries the editable settings of one instance.
+type settingsMsg struct {
+	settings Settings
+	err      error
 }
 
-// Model is the state of the lobby.
+// confirmMsg asks the root to show a modal question before running cmd.
+type confirmMsg struct {
+	question string
+	detail   string
+	yes      tea.Cmd
+}
+
+// confirmation is a modal question that replaces the screen until answered.
+type confirmation struct {
+	question string
+	detail   string
+	yes      tea.Cmd
+}
+
+// Model is the root of the lobby: it owns the screen stack, the bottom note,
+// the help overlay and the confirm dialog.
 type Model struct {
 	ctx     context.Context
 	backend Backend
 
-	items  []Item
-	item   int
-	cursor int
-
-	busy  bool
-	frame int
-	bad   bool
-	note  string
-
-	screen screen
-	logs   []string
-	scroll int
+	stack []screen
 
 	width  int
 	height int
+
+	note string
+	bad  bool
+
+	help    bool
+	confirm *confirmation
 }
 
-// newModel returns a lobby ready to load its instances.
+// newModel returns a lobby showing the instance list.
 func newModel(ctx context.Context, backend Backend) Model {
-	return Model{ctx: ctx, backend: backend}
+	return Model{
+		ctx:     ctx,
+		backend: backend,
+		stack:   []screen{newLobby(ctx, backend)},
+	}
 }
 
-// Init loads the instance list.
+// Init starts the visible screen.
 func (m Model) Init() tea.Cmd {
-	return m.list()
+	return m.top().Init()
 }
 
-// Update routes one message to the screen that owns it.
+// Update routes one message: navigation and global keys stay here, everything
+// else belongs to the screen on top of the stack.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		// Screens keep their own width for text inputs and scroll windows, so
+		// the size must reach them too.
+		return m.forward(msg)
+
+	case pushMsg:
+		m.stack = append(m.stack, msg.screen)
+		m.note, m.bad = "", false
+		return m, msg.screen.Init()
+
+	case popMsg:
+		if len(m.stack) > 1 {
+			m.stack = m.stack[:len(m.stack)-1]
+		}
+		return m, resumeChild()
+
+	case resumeMsg:
+		return m.forward(msg)
+
+	case statusMsg:
+		m.note, m.bad = oneLine(msg.text), msg.err
 		return m, nil
+
+	case confirmMsg:
+		m.confirm = &confirmation{question: msg.question, detail: msg.detail, yes: msg.yes}
+		return m, nil
+
+	case quitMsg:
+		return m, quitProgram()
 
 	case tea.KeyPressMsg:
-		return m.key(msg.String())
+		return m.key(msg)
 
-	case tickMsg:
-		if !m.busy {
-			return m, nil
-		}
-		m.frame++
-		return m, tick()
-
-	case listMsg:
-		m.busy = false
-		if msg.err != nil {
-			m.fail("list instances: " + msg.err.Error())
-			return m, nil
-		}
-		m.items = msg.items
-		m.clampItem()
-		return m, nil
-
-	case resultMsg:
-		m.busy = false
-		if msg.err != nil {
-			m.fail(msg.err.Error())
-			return m, m.list()
-		}
-		m.bad = false
-		m.note = oneLine(msg.text)
-		return m, m.list()
-
-	case logsMsg:
-		m.busy = false
-		if msg.err != nil {
-			m.fail(msg.err.Error())
-			return m, nil
-		}
-		m.logs = msg.lines
-		m.scroll = len(msg.lines)
-		return m, nil
+	default:
+		return m.forward(msg)
 	}
-	return m, nil
 }
 
-// key handles one keystroke for the current screen.
-func (m Model) key(key string) (tea.Model, tea.Cmd) {
-	if key == "ctrl+c" {
-		return m, quit()
-	}
-	if m.screen == screenLogs {
-		return m.logsKey(key)
-	}
-	return m.lobbyKey(key)
-}
+// key handles the keys the root owns before any screen sees them.
+func (m Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
 
-// lobbyKey handles one keystroke of the menu.
-func (m Model) lobbyKey(key string) (tea.Model, tea.Cmd) {
+	if m.confirm != nil {
+		return m.confirmKey(key)
+	}
+	if m.help {
+		if key == "?" || key == "esc" || key == "q" {
+			m.help = false
+		}
+		return m, nil
+	}
+
 	switch key {
-	case "q":
-		return m, quit()
-	case "up", "k":
-		m.cursor = max(0, m.cursor-1)
-	case "down", "j":
-		m.cursor = min(len(menu)-1, m.cursor+1)
-	case "left", "h":
-		if m.item > 0 {
-			m.item--
+	case "ctrl+c":
+		return m, quitProgram()
+	case "?":
+		// While a form edits text, ? is a character and must reach the input.
+		if s, ok := m.top().(textScreener); ok && s.editingText() {
+			break
 		}
-	case "right", "l":
-		if m.item < len(m.items)-1 {
-			m.item++
-		}
-	case "enter", " ":
-		return m.activate()
-	case "r":
-		if m.busy {
-			return m, nil
-		}
-		m.busy, m.bad, m.note = true, false, "refreshing…"
-		return m, tea.Batch(m.list(), tick())
+		m.help = true
+		return m, nil
 	}
-	return m, nil
+	return m.forward(msg)
 }
 
-// logsKey handles one keystroke of the log screen.
-func (m Model) logsKey(key string) (tea.Model, tea.Cmd) {
+// confirmKey answers the modal question.
+func (m Model) confirmKey(key string) (tea.Model, tea.Cmd) {
+	answer := m.confirm
+	m.confirm = nil
+
 	switch key {
-	case "esc", "q", "backspace":
-		m.screen = screenLobby
-		m.logs = nil
-		m.busy = false
-		m.note = ""
-	case "up", "k":
-		m = m.scrollLogs(-1)
-	case "down", "j":
-		m = m.scrollLogs(1)
-	case "pgup":
-		m = m.scrollLogs(-m.logRows())
-	case "pgdown":
-		m = m.scrollLogs(m.logRows())
-	case "r":
-		if m.busy {
-			return m, nil
-		}
-		item, ok := m.current()
-		if !ok {
-			return m, nil
-		}
-		m.busy = true
-		return m, tea.Batch(m.fetchLogs(item.Name), tick())
+	case "y", "Y", "enter":
+		return m, answer.yes
+	case "n", "N", "esc", "q":
+		return m, nil
 	}
+	// Any other key keeps the question open.
+	m.confirm = answer
 	return m, nil
 }
 
-// activate runs the selected menu entry against the selected instance.
-func (m Model) activate() (tea.Model, tea.Cmd) {
-	chosen := menu[m.cursor]
-	if chosen.action == actionQuit {
-		return m, quit()
-	}
-
-	item, ok := m.current()
-	if !ok {
-		m.fail("no instance yet: create one with gamehost create")
-		return m, nil
-	}
-	if m.busy {
-		return m, nil
-	}
-
-	switch chosen.action {
-	case actionStatus:
-		m.busy, m.bad, m.note = true, false, "refreshing "+item.Name+"…"
-		return m, tea.Batch(m.list(), tick())
-	case actionLogs:
-		m.screen = screenLogs
-		m.logs = nil
-		m.scroll = 0
-		m.busy, m.bad, m.note = true, false, ""
-		return m, tea.Batch(m.fetchLogs(item.Name), tick())
-	}
-
-	m.busy, m.bad = true, false
-	m.note = chosen.label + " " + item.Name + "…"
-	return m, tea.Batch(m.run(chosen.action, item.Name), tick())
+// forward hands one message to the visible screen and keeps its new state.
+func (m Model) forward(msg tea.Msg) (tea.Model, tea.Cmd) {
+	top, cmd := m.top().Update(msg)
+	m.stack[len(m.stack)-1] = top
+	return m, cmd
 }
 
-// run turns one action into a tea.Cmd that the runtime runs off the UI loop.
-func (m Model) run(chosen action, name string) tea.Cmd {
-	backend, ctx := m.backend, m.ctx
+// top returns the visible screen.
+func (m Model) top() screen {
+	return m.stack[len(m.stack)-1]
+}
+
+// bodyHeight is how much room the visible screen gets, leaving a line for the
+// bottom note.
+func (m Model) bodyHeight() int {
+	if m.height <= 0 {
+		return 0
+	}
+	return max(8, m.height-1)
+}
+
+// View renders the lobby in the alternate screen.
+func (m Model) View() tea.View {
+	view := tea.NewView(m.render())
+	view.AltScreen = true
+	view.WindowTitle = "gamehost"
+	return view
+}
+
+// render draws the modal, the help or the visible screen plus the note.
+func (m Model) render() string {
+	if m.confirm != nil {
+		return m.renderConfirm()
+	}
+	if m.help {
+		return m.renderHelp()
+	}
+
+	body := m.top().View(m.width, m.bodyHeight())
+	if m.note == "" {
+		return body + "\n"
+	}
+
+	style := dimStyle
+	if m.bad {
+		style = errorStyle
+	}
+	return body + "\n" + style.Render(clip(m.note, m.width))
+}
+
+// askConfirm asks the root to show a modal question whose yes answer runs cmd.
+func askConfirm(question, detail string, yes tea.Cmd) tea.Cmd {
 	return func() tea.Msg {
-		var text string
-		var err error
-		switch chosen {
-		case actionStart:
-			text, err = backend.Start(ctx, name)
-		case actionStop:
-			text, err = backend.Stop(ctx, name)
-		case actionBackup:
-			text, err = backend.Backup(ctx, name)
+		return confirmMsg{question: question, detail: detail, yes: yes}
+	}
+}
+
+// renderConfirm draws the modal question.
+func (m Model) renderConfirm() string {
+	body := titleStyle.Render(m.confirm.question) + "\n\n" +
+		dimStyle.Render(m.confirm.detail) + "\n\n" +
+		selectedStyle.Render("y") + " confirm    " +
+		dimStyle.Render("n") + " cancel"
+	return m.panel(body)
+}
+
+// renderHelp draws the key map of the visible screen plus the global keys.
+func (m Model) renderHelp() string {
+	keys := []KeyHelp{
+		{"↑ ↓", "move", ""},
+		{"← →", "change a value or instance", ""},
+		{"enter", "open or run", ""},
+		{"esc", "back", ""},
+		{"?", "close this help", ""},
+		{"ctrl+c", "leave the lobby", ""},
+	}
+	if k, ok := m.top().(keyser); ok {
+		keys = append(k.Keys(), keys...)
+	}
+
+	keyWidth, actionWidth := 0, 0
+	for _, k := range keys {
+		keyWidth = max(keyWidth, textWidth(k.Key))
+		actionWidth = max(actionWidth, textWidth(k.Action))
+	}
+
+	rows := make([]string, 0, len(keys))
+	for _, k := range keys {
+		row := titleStyle.Render(padRight(k.Key, keyWidth)) + "  " + padRight(k.Action, actionWidth)
+		if k.CLI != "" {
+			row += "  " + dimStyle.Render(k.CLI)
 		}
-		return resultMsg{action: chosen, text: text, err: err}
+		rows = append(rows, row)
 	}
+
+	head := titleStyle.Render("Keys") + "   " + dimStyle.Render("? closes")
+	return m.panel(head + "\n\n" + strings.Join(rows, "\n"))
 }
 
-// list reloads the instance list without blocking the UI.
-func (m Model) list() tea.Cmd {
-	backend := m.backend
-	return func() tea.Msg {
-		items, err := backend.List()
-		return listMsg{items: items, err: err}
+// panel wraps help and modal content in the same frame as the rest.
+func (m Model) panel(content string) string {
+	style := panelStyle
+	if m.width > 12 {
+		style = style.Width(min(76, m.width-4))
 	}
+	return style.Render(content)
 }
 
-// fetchLogs reads the newest log of one instance.
-func (m Model) fetchLogs(name string) tea.Cmd {
-	backend := m.backend
-	return func() tea.Msg {
-		lines, err := backend.Logs(name, DefaultLogLines)
-		return logsMsg{lines: lines, err: err}
-	}
+// push adds a screen to the stack.
+func push(s screen) tea.Cmd {
+	return func() tea.Msg { return pushMsg{screen: s} }
 }
 
-// tick advances the spinner without leaving a timer behind.
-func tick() tea.Cmd {
-	return tea.Tick(120*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
+// pop removes the top screen and tells the new top it is visible again.
+func pop() tea.Cmd {
+	return func() tea.Msg { return popMsg{} }
 }
 
-// quit asks the runtime to leave the alternate screen cleanly.
-func quit() tea.Cmd {
+// resumeChild asks the newly visible screen to refresh.
+func resumeChild() tea.Cmd {
+	return func() tea.Msg { return resumeMsg{} }
+}
+
+// requestQuit leaves the program.
+func requestQuit() tea.Cmd {
+	return func() tea.Msg { return quitMsg{} }
+}
+
+// quitProgram asks the runtime to leave the alternate screen cleanly.
+func quitProgram() tea.Cmd {
 	return func() tea.Msg { return tea.Quit() }
 }
 
-// fail records an inline error that keeps the lobby usable.
-func (m *Model) fail(note string) {
-	m.bad = true
-	m.note = oneLine(note)
+// report publishes one line of feedback.
+func report(format string, args ...any) tea.Cmd {
+	return func() tea.Msg { return statusMsg{text: fmt.Sprintf(format, args...)} }
+}
+
+// reportErr publishes a failure.
+func reportErr(err error) tea.Cmd {
+	return func() tea.Msg { return statusMsg{text: err.Error(), err: true} }
+}
+
+// tick advances a spinner without leaving a timer behind.
+func tick() tea.Cmd {
+	return tea.Tick(120*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
 // oneLine folds a multi-line report into a single footer line, so a backend
 // that returns a whole paragraph cannot break the layout.
 func oneLine(text string) string {
 	return strings.Join(strings.Fields(text), " ")
-}
-
-// clampItem keeps the instance selection inside the list.
-func (m *Model) clampItem() {
-	if len(m.items) == 0 {
-		m.item = 0
-		return
-	}
-	m.item = min(max(0, m.item), len(m.items)-1)
-}
-
-// current returns the selected instance, if any.
-func (m Model) current() (Item, bool) {
-	if m.item < 0 || m.item >= len(m.items) {
-		return Item{}, false
-	}
-	return m.items[m.item], true
-}
-
-// logRows is how many log lines fit between the header and the footer.
-func (m Model) logRows() int {
-	return max(3, m.height-8)
-}
-
-// scrollLogs moves the log window and keeps it inside the buffer.
-func (m Model) scrollLogs(delta int) Model {
-	last := max(0, len(m.logs)-m.logRows())
-	m.scroll = min(max(0, m.scroll+delta), last)
-	return m
 }
