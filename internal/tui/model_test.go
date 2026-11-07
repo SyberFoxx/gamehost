@@ -893,3 +893,26 @@ func TestDoctorShowsTheVerdict(t *testing.T) {
 		}
 	}
 }
+
+// covers leaving the mod screen only when nothing is in flight
+func TestModsKeepsTheScreenWhileBusy(t *testing.T) {
+	t.Parallel()
+	f := &fake{}
+	m := newMods(context.Background(), f.backend().Mods, Item{Name: "corekeeper"}).(*mods)
+	m.busy = true
+
+	for _, key := range []string{"esc", "q"} {
+		if cmd := m.key(press(key)); cmd != nil {
+			t.Fatalf("%q left the mod screen while an action was in flight", key)
+		}
+	}
+
+	m.busy = false
+	cmd := m.key(press("esc"))
+	if cmd == nil {
+		t.Fatalf("esc stopped leaving the mod screen")
+	}
+	if _, ok := cmd().(popMsg); !ok {
+		t.Fatalf("esc did not ask to pop the screen")
+	}
+}

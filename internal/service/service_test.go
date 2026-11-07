@@ -50,7 +50,7 @@ func TestInstallWritesMainUnit(t *testing.T) {
 		"Restart=on-failure",
 		"RestartSec=5",
 		"KillMode=mixed",
-		"TimeoutStopSec=30",
+		"TimeoutStopSec=90",
 		"Environment=GAMEHOST_HOME=/home/ramses/.local/share/gamehost",
 		"Environment=DISPLAY=:0",
 		"WantedBy=default.target",

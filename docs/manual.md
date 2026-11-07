@@ -93,6 +93,9 @@ piden confirmación.
 Si ejecutas `gamehost` desde un script, `tmux` o systemd, usa los comandos; el TUI necesita una
 terminal. `gamehost start` en primer plano tampoco abre TUI: el panel es dueño de la pantalla.
 
+En primer plano, `Ctrl+C` o cerrar la ventana guardan el mundo y apagan el servidor. Con `--detach`
+el servidor vive sin terminal y lo paras con `gamehost stop`.
+
 ## 4. Tu primer servidor
 
 ### Core Keeper

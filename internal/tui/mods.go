@@ -99,6 +99,11 @@ func (m *mods) Update(msg tea.Msg) (screen, tea.Cmd) {
 func (m *mods) key(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc", "q":
+		// An action in flight owns the screen: leaving now would drop its
+		// answer on whatever is visible next.
+		if m.busy {
+			return nil
+		}
 		return pop()
 	case "a", "n":
 		return m.add(false)

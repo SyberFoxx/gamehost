@@ -98,6 +98,9 @@ func runAdminAdd(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := rejectForeignFlags("admin add", inst.Game, setFlags(fs)); err != nil {
+		return err
+	}
 
 	id := strings.TrimSpace(fs.Arg(1))
 	added, err := grantAdmin(s, inst, id, *name, *limited)

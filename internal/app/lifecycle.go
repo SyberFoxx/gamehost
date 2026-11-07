@@ -57,7 +57,23 @@ func runStart(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if _, err := logs.Prune(s.Layout(inst.Name).Logs, logRetention); err != nil {
 		return err
 	}
-	return serve(ctx, s, inst, launch, io.MultiWriter(stdout, logFile), logPath, true)
+	return serve(ctx, s, inst, launch, serverOutput(stdout, logFile), logPath, true)
+}
+
+// serverOutput sends the server's output to the log first and treats stdout as
+// best effort. Once the terminal that started the foreground run goes away,
+// every write to stdout fails, and that failure must not cut the log short or
+// stop the copy loop that drains the server.
+func serverOutput(stdout, log io.Writer) io.Writer {
+	return io.MultiWriter(log, bestEffort{stdout})
+}
+
+// bestEffort drops the errors of a writer whose output does not matter.
+type bestEffort struct{ w io.Writer }
+
+func (b bestEffort) Write(p []byte) (int, error) {
+	_, _ = b.w.Write(p)
+	return len(p), nil
 }
 
 // prepareStart validates a launch and returns its command and log path.
