@@ -146,8 +146,9 @@ func mainUnit(opts Options) string {
 	fmt.Fprintf(&b, "ExecStart=%s start %s\n", arg(opts.Binary), arg(opts.Name))
 	b.WriteString("Restart=on-failure\nRestartSec=5\n")
 	// mixed lets gamehost signal the game itself and gives it the full grace
-	// period before systemd kills the whole control group.
-	b.WriteString("KillMode=mixed\nTimeoutStopSec=30\n")
+	// period before systemd kills the whole control group: 60s for the save
+	// plus 30s for gamehost to write the final state.
+	b.WriteString("KillMode=mixed\nTimeoutStopSec=90\n")
 	if opts.Home != "" {
 		fmt.Fprintf(&b, "Environment=%s\n", envArg("GAMEHOST_HOME="+opts.Home))
 	}

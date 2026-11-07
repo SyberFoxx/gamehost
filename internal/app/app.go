@@ -32,8 +32,9 @@ var (
 	ErrBusy = errors.New("instance is in use by another gamehost command")
 )
 
-// stopGrace is how long a server gets to save before it is killed.
-const stopGrace = 20 * time.Second
+// stopGrace is how long a server gets to save before it is killed. A large
+// world can take a while, and a kill in the middle of a save corrupts it.
+const stopGrace = 60 * time.Second
 
 // logRetention is how many run logs an instance keeps.
 const logRetention = 10

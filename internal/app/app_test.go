@@ -183,6 +183,13 @@ func TestStopSignalsRunningServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("process.Start() error = %v", err)
 	}
+	// Reap the server like the supervisor does. An unreaped zombie keeps the
+	// process group alive and makes stop wait the whole grace period.
+	reaped := make(chan struct{})
+	go func() {
+		_ = server.WaitContext(context.Background(), stopGrace)
+		close(reaped)
+	}()
 
 	s := store.New(os.Getenv("GAMEHOST_HOME"))
 	state := instance.State{Phase: instance.PhaseRunning, PID: server.PID(), StartedAt: time.Now()}
@@ -206,7 +213,7 @@ func TestStopSignalsRunningServer(t *testing.T) {
 	if got.Phase != instance.PhaseStopped || got.PID != 0 {
 		t.Errorf("state = %+v, want stopped without a pid", got)
 	}
-	_ = server.WaitContext(context.Background(), time.Second)
+	<-reaped
 }
 
 // covers refusing a second server on the same data directory
@@ -1331,3 +1338,22 @@ func readTestFile(t *testing.T, path string) string {
 	}
 	return string(data)
 }
+
+// covers keeping the log complete after the terminal goes away
+func TestServerOutputKeepsTheLogAfterAHangup(t *testing.T) {
+	var log bytes.Buffer
+	out := serverOutput(hungUpWriter{}, &log)
+
+	line := "corekeeper is stopped after 1h23m54s (exit 0)\n"
+	if _, err := out.Write([]byte(line)); err != nil {
+		t.Fatalf("write error = %v, want a dead terminal to be ignored", err)
+	}
+	if got := log.String(); got != line {
+		t.Fatalf("log = %q, want %q", got, line)
+	}
+}
+
+// hungUpWriter is a terminal whose window was closed.
+type hungUpWriter struct{}
+
+func (hungUpWriter) Write([]byte) (int, error) { return 0, errors.New("input/output error") }
