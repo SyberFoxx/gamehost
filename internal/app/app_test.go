@@ -822,6 +822,12 @@ func TestConfigRejectsForeignFlags(t *testing.T) {
 	if _, err := runArgs(t, "config", "zomboid", "--udp-port", "16270"); err != nil {
 		t.Errorf("config --udp-port error = %v", err)
 	}
+
+	// The name is the ini file and save directory the server already wrote, so
+	// renaming it from config would change nothing.
+	if _, err := runArgs(t, "config", "zomboid", "--world-name", "renamed"); !errors.Is(err, ErrUsage) {
+		t.Errorf("config --world-name error = %v, want ErrUsage", err)
+	}
 }
 
 // covers config refusing a live server
@@ -903,6 +909,24 @@ func TestDontStarveTogetherCavesAndAdmins(t *testing.T) {
 	}
 	if string(data) != "KU_QDNly1sC\n" {
 		t.Errorf("adminlist.txt = %q", data)
+	}
+
+	// The config verb accepts every setting a cluster really uses, not only the
+	// Core Keeper ones.
+	out, err = runArgs(t, "config", "cave", "--max-players", "20", "--world-name", "Owls II", "--port", "11009")
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	for _, want := range []string{"20", "Owls II", "11009"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("config output missing %q:\n%s", want, out)
+		}
+	}
+
+	// A cluster admin list holds Klei ids only, so a name has to be refused
+	// instead of silently dropped.
+	if _, err := runArgs(t, "admin", "add", "cave", "KU_def12345", "--name", "Wilson"); !errors.Is(err, ErrUsage) {
+		t.Errorf("admin add --name error = %v, want ErrUsage", err)
 	}
 
 	if _, err := runArgs(t, "admin", "remove", "cave", "KU_QDNly1sC"); err != nil {

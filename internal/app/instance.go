@@ -19,7 +19,7 @@ func runCreate(args []string, stdout, stderr io.Writer) error {
 	worldName := fs.String("world-name", "", "world or server name shown to players")
 	seed := fs.String("seed", "", "world seed, empty means random (corekeeper only)")
 	mode := fs.String("mode", "normal", "world mode: normal, hard, creative or casual (corekeeper only)")
-	port := fs.Int("port", 0, "game port; 0 keeps the relay (corekeeper) or uses 16261 (projectzomboid)")
+	port := fs.Int("port", 0, "game port; 0 keeps the relay (corekeeper), 10999 (don't starve together) or 16261 (project zomboid)")
 	udpPort := fs.Int("udp-port", 0, "direct-connect port (projectzomboid only), default game port + 1")
 	password := fs.String("password", "", "join password, at most 28 characters (corekeeper only)")
 	adminPassword := fs.String("admin-password", "", "admin password (projectzomboid only)")
@@ -134,6 +134,7 @@ var flagGames = map[string][]string{
 	"mode":           {instance.GameCoreKeeper},
 	"password":       {instance.GameCoreKeeper},
 	"game-id":        {instance.GameCoreKeeper},
+	"name":           {instance.GameCoreKeeper},
 	"udp-port":       {instance.GameProjectZomboid},
 	"admin-password": {instance.GameProjectZomboid},
 	"cluster-token":  {instance.GameDontStarveTogether},
@@ -252,10 +253,10 @@ func runShow(args []string, stdout, stderr io.Writer) error {
 // runConfig changes the settings of an existing instance without editing JSON.
 func runConfig(args []string, stdout, stderr io.Writer) error {
 	fs := newFlagSet("config", stderr)
-	maxPlayers := fs.Int("max-players", 0, "maximum players, 1-8 (corekeeper only)")
-	worldName := fs.String("world-name", "", "world name shown to players (corekeeper only)")
+	maxPlayers := fs.Int("max-players", 0, "maximum players, 1-8 for core keeper and 1-64 for don't starve together")
+	worldName := fs.String("world-name", "", "world or server name shown to players")
 	mode := fs.String("mode", "", "world mode: normal, hard, creative or casual (corekeeper only)")
-	port := fs.Int("port", 0, "game port; 0 keeps the relay (corekeeper)")
+	port := fs.Int("port", 0, "game port; 0 keeps the relay (corekeeper), 10999 (don't starve together) or 16261 (project zomboid)")
 	udpPort := fs.Int("udp-port", 0, "direct-connect port (projectzomboid only)")
 	password := fs.String("password", "", "join password, empty clears it (corekeeper only)")
 	adminPassword := fs.String("admin-password", "", "admin password (projectzomboid only)")
@@ -318,6 +319,11 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 			opts.GameID = *gameID
 		}
 	case instance.GameProjectZomboid:
+		// The name is the ini file and save directory the server already wrote,
+		// so there is nothing to rename here.
+		if set["world-name"] {
+			return fmt.Errorf("config: --world-name is fixed when the server is created: %w", ErrUsage)
+		}
 		if set["port"] {
 			opts.Port = *port
 		}
