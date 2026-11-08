@@ -38,12 +38,12 @@ S9. The schedule is off by default. An empty interval removes the schedule and i
 
 | ID | Specs | Route | Status | Commit |
 | --- | --- | --- | --- | --- |
-| T1 | S5 | inline | pending | |
-| T2 | S1-S4 | inline | pending | |
-| T3 | S6 | inline | pending | |
-| T4 | S7 | inline | pending | |
-| T5 | S8-S9 | inline | pending | |
-| T6 | docs | inline | pending | |
+| T1 | S5 | inline | done | 93068be |
+| T2 | S1-S4 | inline | done | 93068be |
+| T3 | S6 | inline | done | 93068be |
+| T4 | S7 | inline | done | 93068be |
+| T5 | S8-S9 | inline | done | (next) |
+| T6 | docs | inline | done | (next) |
 
 ## Log
 
@@ -62,3 +62,11 @@ prune deleted the safety archives first.
 
 L4 (2026-11-08): verified live that Project Zomboid preserves `SaveWorldEveryMinutes=15` across a start
 (see `memory-at-setup.md`).
+
+L5 (2026-11-08): T5. `Item.BackupEvery`, `ServerBackend.Configure` and the Backups screen `e` form. The
+summary reads the newest archive from the loaded list, so a fresh backup updates it without a second
+backend call. `lobbyConfigure` saves through `applySettings` without taking `run.lock`, because the
+supervisor holds it for the whole run.
+
+L6 (2026-11-08): T6. `docs/design.md` M18, the systemd section, the config decision and the schedule
+decision; `docs/manual.md` backups section; `AGENTS.md` traps.

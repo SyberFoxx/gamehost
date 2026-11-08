@@ -14,6 +14,10 @@ import (
 // instance has no scheduled keep of its own.
 const defaultBackupKeep = 5
 
+// defaultProjectZomboidMemory is the heap the dedicated server ships with. The
+// wizard prefills it so the value is always explicit.
+const defaultProjectZomboidMemory = "8g"
+
 // restoreMsg asks the screen to replace the world with one archive the user
 // already confirmed.
 type restoreMsg struct{ archive string }
@@ -153,8 +157,45 @@ func (b *backups) key(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		b.imports = true
 		return b.path.Focus()
+	case "e":
+		return push(newScheduleForm(b.ctx, b.backend, b.item, func(every string, keep int) {
+			b.item.BackupEvery = every
+			b.item.BackupKeep = keep
+		}))
 	}
 	return nil
+}
+
+// newScheduleForm edits the interval and the retention of the schedule. The
+// supervisor reloads the instance every tick, so the server keeps running.
+func newScheduleForm(ctx context.Context, backend ServerBackend, item Item, saved func(every string, keep int)) screen {
+	keep := item.BackupKeep
+	if keep <= 0 {
+		keep = defaultBackupKeep
+	}
+
+	return &form{
+		ctx:   ctx,
+		title: "Backup schedule · " + item.Name,
+		cli:   "gamehost config " + item.Name + " --backup-every",
+		fields: []formField{
+			textField("every", "Every", "for example 24h or 30m; empty turns the schedule off", item.BackupEvery),
+			textField("keep", "Keep", "archives kept per class, oldest first", strconv.Itoa(keep)),
+		},
+		submit: func(values map[string]string) (string, error) {
+			count, err := parseKeep(values["keep"])
+			if err != nil {
+				return "", err
+			}
+			every := strings.TrimSpace(values["every"])
+			text, err := backend.Configure(item.Name, every, count)
+			if err != nil {
+				return "", err
+			}
+			saved(every, count)
+			return text, nil
+		},
+	}
 }
 
 // backup asks for the retention before archiving the world.
@@ -294,7 +335,7 @@ func (b *backups) View(width, _ int) string {
 	}
 	head := titleStyle.Render("Backups · "+b.item.Name) + "   " + dimStyle.Render("gamehost backup "+b.item.Name)
 
-	body := head + "\n\n"
+	body := head + "\n" + b.scheduleLine() + "\n\n"
 	switch {
 	case b.imports:
 		body += titleStyle.Render("Import a world") + "\n\n" +
@@ -323,6 +364,20 @@ func (b *backups) View(width, _ int) string {
 	return clipBlock(box(body, width), width)
 }
 
+// scheduleLine summarises the schedule and the newest archive. The newest
+// archive comes from the loaded list, so creating one updates the line.
+func (b *backups) scheduleLine() string {
+	schedule := "schedule: off"
+	if b.item.BackupEvery != "" {
+		schedule = "schedule: every " + b.item.BackupEvery + ", keep " + strconv.Itoa(b.item.BackupKeep)
+	}
+	last := "last: none yet"
+	if len(b.list) > 0 {
+		last = "last: " + b.list[0].Modified.Format("2006-01-02 15:04") + " (" + humanBytes(b.list[0].Bytes) + ")"
+	}
+	return dimStyle.Render(schedule) + "   " + dimStyle.Render(last)
+}
+
 // footer is the key line of the backup screen.
 func (b *backups) footer() string {
 	if b.imports {
@@ -331,7 +386,7 @@ func (b *backups) footer() string {
 	if b.busy {
 		return dimStyle.Render("working…")
 	}
-	return dimStyle.Render("↑↓ move    enter restore    b backup    i import    r reload    esc back")
+	return dimStyle.Render("↑↓ move    enter restore    b backup    e schedule    i import    r reload    esc back")
 }
 
 // editingText tells the root that ? belongs to the import path.
@@ -342,6 +397,7 @@ func (b *backups) Keys() []KeyHelp {
 	name := b.item.Name
 	return []KeyHelp{
 		{"b", "archive the world, choose the retention", "gamehost backup " + name + " --keep"},
+		{"e", "edit the backup schedule and its retention", "gamehost config " + name + " --backup-every"},
 		{"enter", "restore the selected archive", "gamehost restore " + name},
 		{"i", "import a .world.gzip", "gamehost import-world " + name},
 		{"r", "reload the archive list", ""},

@@ -815,6 +815,83 @@ func TestConfig(t *testing.T) {
 	}
 }
 
+// covers the world autosave flag of project zomboid
+func TestProjectZomboidAutosave(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "zomboid", "--game", "projectzomboid",
+		"--admin-password", "secret", "--autosave", "20"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	s := store.New(os.Getenv("GAMEHOST_HOME"))
+	inst, err := s.Load("zomboid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inst.AutosaveMinutes != 20 {
+		t.Errorf("AutosaveMinutes = %d, want 20", inst.AutosaveMinutes)
+	}
+
+	out, err := runArgs(t, "show", "zomboid")
+	if err != nil {
+		t.Fatalf("show error = %v", err)
+	}
+	if !strings.Contains(out, "every 20m") {
+		t.Errorf("show output = %q, want the interval", out)
+	}
+
+	if _, err := runArgs(t, "config", "zomboid", "--autosave", "0"); err != nil {
+		t.Fatalf("config error = %v", err)
+	}
+	if inst, err = s.Load("zomboid"); err != nil || inst.AutosaveMinutes != 0 {
+		t.Errorf("autosave = %d (error %v), want the game default", inst.AutosaveMinutes, err)
+	}
+
+	// Out of range values never reach the instance.
+	if _, err := runArgs(t, "config", "zomboid", "--autosave", "70000"); !errors.Is(err, instance.ErrInvalid) {
+		t.Errorf("config --autosave 70000 error = %v, want ErrInvalid", err)
+	}
+
+	// The flag belongs to project zomboid alone.
+	if _, err := runArgs(t, "create", "keeper", "--autosave", "10"); !errors.Is(err, ErrUsage) {
+		t.Errorf("create --autosave on core keeper error = %v, want ErrUsage", err)
+	}
+}
+
+// covers the settings a running server accepts live and the one it refuses
+// before stopping
+func TestConfigLiveSettings(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "zomboid", "--game", "projectzomboid", "--admin-password", "secret"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	s := store.New(os.Getenv("GAMEHOST_HOME"))
+	if err := s.SaveState("zomboid", instance.State{
+		Phase: instance.PhaseRunning,
+		PID:   os.Getpid(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The schedule is read by the supervisor on every tick, so it needs no
+	// stop and takes effect while the server runs.
+	if _, err := runArgs(t, "config", "zomboid", "--backup-every", "6h"); err != nil {
+		t.Fatalf("config --backup-every error = %v", err)
+	}
+	if inst, err := s.Load("zomboid"); err != nil || inst.Backup.Every != "6h" {
+		t.Errorf("backup = %+v (error %v), want the new schedule", inst.Backup, err)
+	}
+
+	// A heap this machine cannot hold is refused before the server is touched.
+	if _, err := runArgs(t, "config", "zomboid", "--memory", "1t"); !errors.Is(err, instance.ErrInvalid) {
+		t.Errorf("config --memory 1t error = %v, want ErrInvalid", err)
+	}
+	if inst, err := s.Load("zomboid"); err != nil || inst.Memory != instance.DefaultProjectZomboidMemory {
+		t.Errorf("memory = %q (error %v), want the untouched default", inst.Memory, err)
+	}
+}
+
 // covers config rejecting settings of the other game
 func TestConfigRejectsForeignFlags(t *testing.T) {
 	t.Setenv("GAMEHOST_HOME", t.TempDir())
@@ -1394,26 +1471,26 @@ func TestProjectZomboidMemory(t *testing.T) {
 		t.Errorf("stored memory = %q (error %v), want 2g", inst.Memory, err)
 	}
 
-	// An empty value restores the default the server ships with.
+	// An empty value stores the heap the server ships with, explicitly.
 	if _, err := runArgs(t, "config", "zomboid", "--memory", ""); err != nil {
 		t.Fatalf("config --memory \"\" error = %v", err)
 	}
-	if inst, err = s.Load("zomboid"); err != nil || inst.Memory != "" {
-		t.Errorf("stored memory = %q (error %v), want the default", inst.Memory, err)
+	if inst, err = s.Load("zomboid"); err != nil || inst.Memory != instance.DefaultProjectZomboidMemory {
+		t.Errorf("stored memory = %q (error %v), want %s", inst.Memory, err, instance.DefaultProjectZomboidMemory)
 	}
 	out, err = runArgs(t, "config", "zomboid")
 	if err != nil {
 		t.Fatalf("config error = %v", err)
 	}
-	if !strings.Contains(out, "8g (default)") {
-		t.Errorf("config output = %q, want the default heap", out)
+	if !strings.Contains(out, instance.DefaultProjectZomboidMemory) {
+		t.Errorf("config output = %q, want the stored heap", out)
 	}
 
 	// Below 512m nothing boots, so the value is refused and nothing changes.
 	if _, err := runArgs(t, "config", "zomboid", "--memory", "256m"); !errors.Is(err, instance.ErrInvalid) {
 		t.Errorf("config --memory 256m error = %v, want ErrInvalid", err)
 	}
-	if inst, err = s.Load("zomboid"); err != nil || inst.Memory != "" {
+	if inst, err = s.Load("zomboid"); err != nil || inst.Memory != instance.DefaultProjectZomboidMemory {
 		t.Errorf("a refused heap changed the instance: %q", inst.Memory)
 	}
 

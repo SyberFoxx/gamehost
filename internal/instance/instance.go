@@ -39,6 +39,8 @@ const (
 	// minProjectZomboidMemory keeps a typo from starting a server the JVM
 	// cannot run: below 512m the game fails to boot.
 	minProjectZomboidMemory = 512 << 20
+	// maxAutosaveMinutes is the largest interval the server ini accepts.
+	maxAutosaveMinutes = 65535
 
 	// DontStarveTogetherMaxPlayers is the largest lobby the server accepts.
 	DontStarveTogetherMaxPlayers = 64
@@ -186,32 +188,37 @@ type Instance struct {
 	ClusterToken string `json:"cluster_token,omitempty"`
 	// Caves runs the Caves shard next to the Master on the same machine.
 	Caves bool `json:"caves,omitempty"`
-	// Memory is the JVM heap of the Project Zomboid server, such as "4g". An
-	// empty value keeps DefaultProjectZomboidMemory.
+	// Memory is the JVM heap of the Project Zomboid server, such as "4g".
+	// A Project Zomboid instance always stores one; the driver writes it into
+	// the launcher before every start.
 	Memory string `json:"memory,omitempty"`
-	Backup Backup `json:"backup"`
+	// AutosaveMinutes is how often the Project Zomboid world saves itself.
+	// Zero keeps the value the game ships with.
+	AutosaveMinutes int    `json:"autosave_minutes,omitempty"`
+	Backup          Backup `json:"backup"`
 }
 
 // Options carries the user-facing settings of a new instance.
 type Options struct {
-	Game          string
-	MaxPlayers    int
-	WorldName     string
-	Seed          string
-	Mode          Mode
-	Port          int
-	UDPPort       int
-	Password      string
-	AdminPassword string
-	GameID        string
-	ClusterToken  string
-	Offline       bool
-	Caves         bool
-	Memory        string
-	BackupEvery   string
-	BackupKeep    int
-	InstallDir    string
-	DataDir       string
+	Game            string
+	MaxPlayers      int
+	WorldName       string
+	Seed            string
+	Mode            Mode
+	Port            int
+	UDPPort         int
+	Password        string
+	AdminPassword   string
+	GameID          string
+	ClusterToken    string
+	Offline         bool
+	Caves           bool
+	Memory          string
+	AutosaveMinutes int
+	BackupEvery     string
+	BackupKeep      int
+	InstallDir      string
+	DataDir         string
 }
 
 // New builds an instance with defaults applied and invariants checked.
@@ -274,7 +281,9 @@ func New(name string, opts Options) (Instance, error) {
 	}
 
 	// The heap is stored normalized, so two spellings never look like two
-	// different settings.
+	// different settings. The dedicated Project Zomboid server ships with
+	// 8g, and storing it explicitly is what makes the setting honest: an
+	// empty value never means "whatever the launcher currently has".
 	memory := opts.Memory
 	if memory != "" {
 		normalized, err := normalizeMemory(memory)
@@ -283,21 +292,25 @@ func New(name string, opts Options) (Instance, error) {
 		}
 		memory = normalized
 	}
+	if game == GameProjectZomboid && memory == "" {
+		memory = DefaultProjectZomboidMemory
+	}
 
 	inst := Instance{
-		Name:          name,
-		Game:          game,
-		InstallDir:    opts.InstallDir,
-		DataDir:       opts.DataDir,
-		World:         world,
-		Network:       network,
-		MaxPlayers:    opts.MaxPlayers,
-		GameID:        opts.GameID,
-		AdminPassword: opts.AdminPassword,
-		ClusterToken:  opts.ClusterToken,
-		Caves:         opts.Caves,
-		Memory:        memory,
-		Backup:        backup,
+		Name:            name,
+		Game:            game,
+		InstallDir:      opts.InstallDir,
+		DataDir:         opts.DataDir,
+		World:           world,
+		Network:         network,
+		MaxPlayers:      opts.MaxPlayers,
+		GameID:          opts.GameID,
+		AdminPassword:   opts.AdminPassword,
+		ClusterToken:    opts.ClusterToken,
+		Caves:           opts.Caves,
+		Memory:          memory,
+		AutosaveMinutes: opts.AutosaveMinutes,
+		Backup:          backup,
 	}
 	if err := inst.Validate(); err != nil {
 		return Instance{}, err
@@ -376,6 +389,9 @@ func (i Instance) validateCoreKeeper() error {
 	if i.Memory != "" {
 		return fmt.Errorf("memory is only used by project zomboid: %w", ErrInvalid)
 	}
+	if i.AutosaveMinutes != 0 {
+		return fmt.Errorf("world autosave is only used by project zomboid: %w", ErrInvalid)
+	}
 	if i.Caves {
 		return fmt.Errorf("the caves shard belongs to don't starve together: %w", ErrInvalid)
 	}
@@ -418,6 +434,10 @@ func (i Instance) validateProjectZomboid() error {
 			return err
 		}
 	}
+	// The ini accepts a minute count in this range; zero keeps the game default.
+	if i.AutosaveMinutes < 0 || i.AutosaveMinutes > maxAutosaveMinutes {
+		return fmt.Errorf("autosave minutes %d must be between 0 and %d: %w", i.AutosaveMinutes, maxAutosaveMinutes, ErrInvalid)
+	}
 	if i.Network.Mode != NetworkDirect {
 		return fmt.Errorf("project zomboid always uses direct connections: %w", ErrInvalid)
 	}
@@ -452,6 +472,9 @@ func (i Instance) validateDontStarveTogether() error {
 	}
 	if i.Memory != "" {
 		return fmt.Errorf("memory is only used by project zomboid: %w", ErrInvalid)
+	}
+	if i.AutosaveMinutes != 0 {
+		return fmt.Errorf("world autosave is only used by project zomboid: %w", ErrInvalid)
 	}
 	// The join password lives in cluster.ini, which the server owns.
 	if i.Network.Password != "" {

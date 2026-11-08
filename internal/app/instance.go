@@ -7,7 +7,10 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/syberfoxx/gamehost/internal/game"
+	"github.com/syberfoxx/gamehost/internal/games"
 	"github.com/syberfoxx/gamehost/internal/instance"
+	"github.com/syberfoxx/gamehost/internal/process"
 	"github.com/syberfoxx/gamehost/internal/store"
 )
 
@@ -24,6 +27,7 @@ func runCreate(args []string, stdout, stderr io.Writer) error {
 	password := fs.String("password", "", "join password, at most 28 characters (corekeeper only)")
 	adminPassword := fs.String("admin-password", "", "admin password (projectzomboid only)")
 	memory := fs.String("memory", "", "JVM heap such as 4g or 4096m (projectzomboid only), empty uses 8g")
+	autosave := fs.Int("autosave", 0, "world autosave interval in minutes (projectzomboid only), 0 keeps the game default")
 	gameID := fs.String("game-id", "", "fixed game ID, 15-28 alphanumeric characters (corekeeper only)")
 	clusterToken := fs.String("cluster-token", "", "Klei cluster token (dontstarvetogether online only)")
 	offline := fs.Bool("offline", false, "LAN-only cluster without a Klei token (dontstarvetogether only)")
@@ -74,6 +78,7 @@ func runCreate(args []string, stdout, stderr io.Writer) error {
 		opts.UDPPort = *udpPort
 		opts.AdminPassword = *adminPassword
 		opts.Memory = *memory
+		opts.AutosaveMinutes = *autosave
 	case instance.GameDontStarveTogether:
 		opts.MaxPlayers = *maxPlayers
 		opts.Port = *port
@@ -140,6 +145,7 @@ var flagGames = map[string][]string{
 	"udp-port":       {instance.GameProjectZomboid},
 	"admin-password": {instance.GameProjectZomboid},
 	"memory":         {instance.GameProjectZomboid},
+	"autosave":       {instance.GameProjectZomboid},
 	"cluster-token":  {instance.GameDontStarveTogether},
 	"offline":        {instance.GameDontStarveTogether},
 	"caves":          {instance.GameDontStarveTogether},
@@ -169,24 +175,25 @@ func parseBackupEvery(value string) (string, error) {
 // optionsOf turns an instance back into the settings a new one is built from.
 func optionsOf(inst instance.Instance) instance.Options {
 	return instance.Options{
-		Game:          inst.Game,
-		MaxPlayers:    inst.MaxPlayers,
-		WorldName:     inst.World.Name,
-		Seed:          inst.World.Seed,
-		Mode:          inst.World.Mode,
-		Port:          inst.Network.Port,
-		UDPPort:       inst.Network.UDPPort,
-		Password:      inst.Network.Password,
-		AdminPassword: inst.AdminPassword,
-		Memory:        inst.Memory,
-		GameID:        inst.GameID,
-		ClusterToken:  inst.ClusterToken,
-		Offline:       inst.Network.Mode == instance.NetworkOffline,
-		Caves:         inst.Caves,
-		BackupEvery:   inst.Backup.Every,
-		BackupKeep:    inst.Backup.Keep,
-		InstallDir:    inst.InstallDir,
-		DataDir:       inst.DataDir,
+		Game:            inst.Game,
+		MaxPlayers:      inst.MaxPlayers,
+		WorldName:       inst.World.Name,
+		Seed:            inst.World.Seed,
+		Mode:            inst.World.Mode,
+		Port:            inst.Network.Port,
+		UDPPort:         inst.Network.UDPPort,
+		Password:        inst.Network.Password,
+		AdminPassword:   inst.AdminPassword,
+		Memory:          inst.Memory,
+		AutosaveMinutes: inst.AutosaveMinutes,
+		GameID:          inst.GameID,
+		ClusterToken:    inst.ClusterToken,
+		Offline:         inst.Network.Mode == instance.NetworkOffline,
+		Caves:           inst.Caves,
+		BackupEvery:     inst.Backup.Every,
+		BackupKeep:      inst.Backup.Keep,
+		InstallDir:      inst.InstallDir,
+		DataDir:         inst.DataDir,
 	}
 }
 
@@ -265,6 +272,7 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	password := fs.String("password", "", "join password, empty clears it (corekeeper only)")
 	adminPassword := fs.String("admin-password", "", "admin password (projectzomboid only)")
 	memory := fs.String("memory", "", "JVM heap such as 4g or 4096m (projectzomboid only), empty uses 8g")
+	autosave := fs.Int("autosave", 0, "world autosave interval in minutes (projectzomboid only), 0 keeps the game default")
 	gameID := fs.String("game-id", "", "fixed game ID, empty generates one on the next start (corekeeper only)")
 	backupEvery := fs.String("backup-every", "", "scheduled backup interval such as 24h; off disables it")
 	backupKeep := fs.Int("backup-keep", 0, "scheduled archives to keep")
@@ -287,13 +295,6 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	if len(set) == 0 {
 		return writeRows(stdout, instanceRows(inst))
 	}
-
-	// The server reads these settings at launch, so it must not be running.
-	release, err := requireStopped(s, inst, "config")
-	if err != nil {
-		return err
-	}
-	defer release()
 
 	if err := rejectForeignFlags("config", inst.Game, set); err != nil {
 		return err
@@ -341,6 +342,9 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		if set["memory"] {
 			opts.Memory = *memory
 		}
+		if set["autosave"] {
+			opts.AutosaveMinutes = *autosave
+		}
 	case instance.GameDontStarveTogether:
 		if set["max-players"] {
 			opts.MaxPlayers = *maxPlayers
@@ -375,13 +379,90 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		opts.BackupKeep = *backupKeep
 	}
 
+	// The launch settings are read at start; the schedule and the Project
+	// Zomboid heap can change under a running server. A new heap only applies
+	// on the next launch, so that one change restarts the server itself.
+	needsStop := false
+	for name := range set {
+		switch {
+		case name == "backup-every", name == "backup-keep":
+		case name == "memory" && inst.Game == instance.GameProjectZomboid:
+		case name == "autosave" && inst.Game == instance.GameProjectZomboid:
+		default:
+			needsStop = true
+		}
+	}
+	// A value only a launch can apply restarts a server that is already up.
+	// A stopped one only needs the new settings saved.
+	restart := !needsStop && (set["memory"] && opts.Memory != inst.Memory ||
+		set["autosave"] && opts.AutosaveMinutes != inst.AutosaveMinutes)
+	if restart {
+		state, err := s.LoadState(inst.Name)
+		if err != nil {
+			return err
+		}
+		restart = state.Running() && process.Alive(state.PID)
+	}
+
+	switch {
+	case needsStop:
+		release, err := requireStopped(s, inst, "config")
+		if err != nil {
+			return err
+		}
+		defer release()
+	case restart:
+		// Validate the heap before taking the server down: a value the JVM
+		// cannot run must leave the running server alone.
+		if err := validateRuntime(inst.Game, inst.Name, opts); err != nil {
+			return err
+		}
+	}
+
 	updated, err := applySettings(s, inst, opts)
 	if err != nil {
 		return err
 	}
 
+	if restart {
+		if err := restartInstance(s, inst, updated, stdout); err != nil {
+			return err
+		}
+	}
+
 	fmt.Fprintf(stdout, "updated %s\n", updated.Name)
 	return writeRows(stdout, instanceRows(updated))
+}
+
+// validateRuntime builds the candidate instance and lets the driver check it
+// without writing a file, so an impossible setting fails before a stop.
+func validateRuntime(gameName, name string, opts instance.Options) error {
+	candidate, err := instance.New(name, opts)
+	if err != nil {
+		return err
+	}
+	driver, err := games.Lookup(gameName)
+	if err != nil {
+		return err
+	}
+	validator, ok := driver.Runner.(game.Validator)
+	if !ok {
+		return nil
+	}
+	return validator.Validate(candidate)
+}
+
+// restartInstance stops a running server that is about to receive a setting
+// only a launch can apply, then starts it again under the same supervisor.
+func restartInstance(s *store.Store, was, now instance.Instance, stdout io.Writer) error {
+	if err := stopInstance(s, was, stdout); err != nil {
+		return err
+	}
+	_, _, logPath, err := prepareStart(s, now)
+	if err != nil {
+		return err
+	}
+	return startDetached(s, now, logPath, stdout)
 }
 
 // instanceRows returns the configuration of one instance as label and value pairs.
@@ -400,6 +481,7 @@ func instanceRows(inst instance.Instance) [][2]string {
 			[2]string{"direct port", fmt.Sprint(inst.Network.UDPPort)},
 			[2]string{"admin password", orDefault(inst.AdminPassword, "(none)")},
 			[2]string{"memory", orDefault(inst.Memory, instance.DefaultProjectZomboidMemory+" (default)")},
+			[2]string{"autosave", autosaveSummary(inst.AutosaveMinutes)},
 			[2]string{"max players", "from the server ini"},
 			[2]string{"scheduled backup", backupSummary(inst.Backup)},
 		)
@@ -433,4 +515,12 @@ func backupSummary(b instance.Backup) string {
 		return "(off)"
 	}
 	return fmt.Sprintf("every %s, keep %d", b.Every, b.Retention())
+}
+
+// autosaveSummary renders the world save interval.
+func autosaveSummary(minutes int) string {
+	if minutes <= 0 {
+		return "(game default)"
+	}
+	return fmt.Sprintf("every %dm", minutes)
 }

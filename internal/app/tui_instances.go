@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -47,10 +48,11 @@ func lobbyItem(s *store.Store, inst instance.Instance) (tui.Item, error) {
 	state = state.Resolve(live)
 
 	item := tui.Item{
-		Name:       inst.Name,
-		Game:       inst.Game,
-		Phase:      string(state.Phase),
-		BackupKeep: inst.Backup.Retention(),
+		Name:        inst.Name,
+		Game:        inst.Game,
+		Phase:       string(state.Phase),
+		BackupEvery: inst.Backup.Every,
+		BackupKeep:  inst.Backup.Retention(),
 	}
 	if driver, err := games.Lookup(inst.Game); err == nil {
 		if driver.Label != "" {
@@ -129,22 +131,85 @@ func lobbyUpdate(name string, change tui.Settings) (tui.Detail, error) {
 		return tui.Detail{}, err
 	}
 
-	// The launch flags are read at start, so the server must be stopped.
-	release, err := requireStopped(s, inst, "config")
-	if err != nil {
-		return tui.Detail{}, err
-	}
-	defer release()
-
 	opts, err := updateOptions(inst, change)
 	if err != nil {
 		return tui.Detail{}, err
 	}
+
+	// The launch flags are read at start, so a change to them needs the server
+	// stopped. The schedule applies live, and the heap and the autosave only
+	// need a restart of a server that is already up.
+	restart := opts.Memory != inst.Memory || opts.AutosaveMinutes != inst.AutosaveMinutes
+	if launchSettingsChanged(inst, opts) {
+		release, err := requireStopped(s, inst, "config")
+		if err != nil {
+			return tui.Detail{}, err
+		}
+		defer release()
+	} else if restart {
+		state, err := s.LoadState(inst.Name)
+		if err != nil {
+			return tui.Detail{}, err
+		}
+		if state.Running() && process.Alive(state.PID) {
+			if err := validateRuntime(inst.Game, inst.Name, opts); err != nil {
+				return tui.Detail{}, err
+			}
+		} else {
+			restart = false
+		}
+	}
+
 	updated, err := applySettings(s, inst, opts)
 	if err != nil {
 		return tui.Detail{}, err
 	}
+	if restart {
+		if err := restartInstance(s, inst, updated, io.Discard); err != nil {
+			return tui.Detail{}, err
+		}
+	}
 	return lobbyDetail(s, updated)
+}
+
+// launchSettingsChanged reports whether an edit touches a value the server
+// only reads at start.
+func launchSettingsChanged(inst instance.Instance, opts instance.Options) bool {
+	return opts.WorldName != inst.World.Name ||
+		opts.Seed != inst.World.Seed ||
+		opts.Mode != inst.World.Mode ||
+		opts.MaxPlayers != inst.MaxPlayers ||
+		opts.Port != inst.Network.Port ||
+		opts.UDPPort != inst.Network.UDPPort ||
+		opts.Password != inst.Network.Password ||
+		opts.AdminPassword != inst.AdminPassword ||
+		opts.GameID != inst.GameID ||
+		opts.ClusterToken != inst.ClusterToken ||
+		opts.Offline != (inst.Network.Mode == instance.NetworkOffline) ||
+		opts.Caves != inst.Caves
+}
+
+// lobbyConfigure saves the backup schedule while the server keeps running.
+func lobbyConfigure(name, every string, keep int) (string, error) {
+	s, inst, err := loadInstance(name)
+	if err != nil {
+		return "", err
+	}
+	parsed, err := parseBackupEvery(every)
+	if err != nil {
+		return "", err
+	}
+	opts := optionsOf(inst)
+	opts.BackupEvery = parsed
+	opts.BackupKeep = keep
+	if parsed == "" {
+		opts.BackupKeep = 0
+	}
+	updated, err := applySettings(s, inst, opts)
+	if err != nil {
+		return "", err
+	}
+	return "backup schedule saved for " + updated.Name, nil
 }
 
 // createOptions parses the wizard values with the rules of `create`.
@@ -241,6 +306,10 @@ func projectZomboidOptions(settings tui.Settings, opts instance.Options) (instan
 	opts.UDPPort = udp
 	opts.AdminPassword = settings.AdminPassword
 	opts.Memory = settings.Memory
+	opts.AutosaveMinutes, err = parseInt("autosave", settings.AutosaveMinutes)
+	if err != nil {
+		return instance.Options{}, err
+	}
 	opts.BackupEvery = every
 	opts.BackupKeep = keep
 	return opts, nil
@@ -295,22 +364,23 @@ func parseInt(field, value string) (int, error) {
 // settingsOf turns an instance into the editable settings DTO.
 func settingsOf(inst instance.Instance) tui.Settings {
 	return tui.Settings{
-		Game:          inst.Game,
-		Name:          inst.Name,
-		WorldName:     inst.World.Name,
-		Seed:          inst.World.Seed,
-		Mode:          string(inst.World.Mode),
-		MaxPlayers:    strconv.Itoa(inst.MaxPlayers),
-		Port:          strconv.Itoa(inst.Network.Port),
-		UDPPort:       strconv.Itoa(inst.Network.UDPPort),
-		Password:      inst.Network.Password,
-		AdminPassword: inst.AdminPassword,
-		Memory:        inst.Memory,
-		GameID:        inst.GameID,
-		Network:       inst.Network.Mode,
-		ClusterToken:  inst.ClusterToken,
-		Caves:         yesNo(inst.Caves),
-		BackupEvery:   inst.Backup.Every,
-		BackupKeep:    strconv.Itoa(inst.Backup.Keep),
+		Game:            inst.Game,
+		Name:            inst.Name,
+		WorldName:       inst.World.Name,
+		Seed:            inst.World.Seed,
+		Mode:            string(inst.World.Mode),
+		MaxPlayers:      strconv.Itoa(inst.MaxPlayers),
+		Port:            strconv.Itoa(inst.Network.Port),
+		UDPPort:         strconv.Itoa(inst.Network.UDPPort),
+		Password:        inst.Network.Password,
+		AdminPassword:   inst.AdminPassword,
+		Memory:          inst.Memory,
+		AutosaveMinutes: intOrEmpty(inst.AutosaveMinutes),
+		GameID:          inst.GameID,
+		Network:         inst.Network.Mode,
+		ClusterToken:    inst.ClusterToken,
+		Caves:           yesNo(inst.Caves),
+		BackupEvery:     inst.Backup.Every,
+		BackupKeep:      strconv.Itoa(inst.Backup.Keep),
 	}
 }

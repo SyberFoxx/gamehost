@@ -367,8 +367,8 @@ func TestProjectZomboidMemorySettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rebuild: %v", err)
 	}
-	if updated.Memory != "" {
-		t.Fatalf("Memory = %q, want the default", updated.Memory)
+	if updated.Memory != instance.DefaultProjectZomboidMemory {
+		t.Fatalf("Memory = %q, want %s", updated.Memory, instance.DefaultProjectZomboidMemory)
 	}
 
 	// A bad value reaches the model error, not the store.

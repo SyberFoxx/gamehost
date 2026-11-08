@@ -35,11 +35,11 @@ S7. `gamehost show` and a flagless `config` print the heap and the autosave inte
 
 | ID | Specs | Route | Status | Commit |
 | --- | --- | --- | --- | --- |
-| T1 | S1, S6 | inline | pending | |
-| T2 | S5 | inline | pending | |
-| T3 | S3, S7 | inline | pending | |
-| T4 | S2, S4, S5 | inline | pending | |
-| T5 | docs | inline | pending | |
+| T1 | S1, S6 | inline | done | (next) |
+| T2 | S5 | inline | done | (next) |
+| T3 | S3, S7 | inline | done | (next) |
+| T4 | S2, S4, S5 | inline | done | (next) |
+| T5 | docs | inline | done | (next) |
 
 ## Log
 
@@ -57,3 +57,18 @@ the game reads the ini value and does not reset it. The setting is written befor
 L4 (2026-11-08): the PZ ini only exists after the first start, so the first launch of a brand new
 instance cannot carry the interval. It applies from the second start; a `config --autosave` restart
 applies it immediately.
+
+L5 (2026-11-08): T1. `instance.New` fills `8g` for Project Zomboid, and both other games reject
+`AutosaveMinutes` like they reject `Memory`.
+
+L6 (2026-11-08): T2. `SaveWorldEveryMinutes` is written by the driver's `prepare`, after the heap,
+through the same `setIniValue` the mod store uses. A missing ini is skipped. `AutosaveMinutes` is
+range-checked in the model (0-65535).
+
+L7 (2026-11-08): T3. `game.Validator` is the pure check `config` uses before a stop, so the launch
+file writes stay in `Prepare`. `restartInstance` stops, saves and starts detached; a memory-only
+change does not need `run.lock` because the supervisor releases it when the stop completes.
+
+L8 (2026-11-08): T4. The wizard prefills `8g`; the Autosave field is PZ-only. `lobbyUpdate` mirrors
+`runConfig`: launch flags need a stop, the schedule is live, heap/autosave restart a running server
+after validation.

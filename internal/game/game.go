@@ -28,6 +28,13 @@ type Preparer interface {
 	Prepare(inst instance.Instance) error
 }
 
+// Validator checks the settings a launch would apply without writing a file.
+// A command that changes a running instance uses it to refuse an impossible
+// value before it stops the server.
+type Validator interface {
+	Validate(inst instance.Instance) error
+}
+
 // Runner turns an instance into a launch and reports how players join it.
 type Runner interface {
 	Launch(inst instance.Instance) (Launch, error)
