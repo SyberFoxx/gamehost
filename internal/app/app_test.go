@@ -1357,3 +1357,75 @@ func TestServerOutputKeepsTheLogAfterAHangup(t *testing.T) {
 type hungUpWriter struct{}
 
 func (hungUpWriter) Write([]byte) (int, error) { return 0, errors.New("input/output error") }
+
+// covers the heap of the project zomboid server
+func TestProjectZomboidMemory(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "zomboid", "--game", "projectzomboid",
+		"--admin-password", "secret", "--memory", "4G"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+
+	s := store.New(os.Getenv("GAMEHOST_HOME"))
+	inst, err := s.Load("zomboid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inst.Memory != "4g" {
+		t.Errorf("Memory = %q, want the value normalized to 4g", inst.Memory)
+	}
+
+	out, err := runArgs(t, "show", "zomboid")
+	if err != nil {
+		t.Fatalf("show error = %v", err)
+	}
+	if !strings.Contains(out, "memory") || !strings.Contains(out, "4g") {
+		t.Errorf("show output = %q, want the heap", out)
+	}
+
+	out, err = runArgs(t, "config", "zomboid", "--memory", "2g")
+	if err != nil {
+		t.Fatalf("config error = %v", err)
+	}
+	if !strings.Contains(out, "updated zomboid") || !strings.Contains(out, "2g") {
+		t.Errorf("config output = %q", out)
+	}
+	if inst, err = s.Load("zomboid"); err != nil || inst.Memory != "2g" {
+		t.Errorf("stored memory = %q (error %v), want 2g", inst.Memory, err)
+	}
+
+	// An empty value restores the default the server ships with.
+	if _, err := runArgs(t, "config", "zomboid", "--memory", ""); err != nil {
+		t.Fatalf("config --memory \"\" error = %v", err)
+	}
+	if inst, err = s.Load("zomboid"); err != nil || inst.Memory != "" {
+		t.Errorf("stored memory = %q (error %v), want the default", inst.Memory, err)
+	}
+	out, err = runArgs(t, "config", "zomboid")
+	if err != nil {
+		t.Fatalf("config error = %v", err)
+	}
+	if !strings.Contains(out, "8g (default)") {
+		t.Errorf("config output = %q, want the default heap", out)
+	}
+
+	// Below 512m nothing boots, so the value is refused and nothing changes.
+	if _, err := runArgs(t, "config", "zomboid", "--memory", "256m"); !errors.Is(err, instance.ErrInvalid) {
+		t.Errorf("config --memory 256m error = %v, want ErrInvalid", err)
+	}
+	if inst, err = s.Load("zomboid"); err != nil || inst.Memory != "" {
+		t.Errorf("a refused heap changed the instance: %q", inst.Memory)
+	}
+
+	// The flag belongs to project zomboid alone.
+	if _, err := runArgs(t, "create", "corekeeper", "--memory", "4g"); !errors.Is(err, ErrUsage) {
+		t.Errorf("create corekeeper --memory error = %v, want ErrUsage", err)
+	}
+	if _, err := runArgs(t, "create", "keeper"); err != nil {
+		t.Fatalf("create corekeeper error = %v", err)
+	}
+	if _, err := runArgs(t, "config", "keeper", "--memory", "4g"); !errors.Is(err, ErrUsage) {
+		t.Errorf("config corekeeper --memory error = %v, want ErrUsage", err)
+	}
+}

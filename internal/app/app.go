@@ -88,7 +88,7 @@ mods subcommands:
 config flags:
   --max-players N, --world-name NAME, --mode NAME, --port N, --password PW, --game-id ID
                                                                     (corekeeper)
-  --port N, --udp-port N, --admin-password PW                        (projectzomboid)
+  --port N, --udp-port N, --admin-password PW, --memory SIZE         (projectzomboid)
   --max-players N, --port N, --cluster-token TOKEN, --offline, --caves
                                                                     (dontstarvetogether)
   --backup-every DUR, --backup-keep N    scheduled backup window, off by default
