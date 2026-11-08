@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -226,6 +227,14 @@ func TestPrune(t *testing.T) {
 		"2026-11-03_10-00-00.tar.gz": "three",
 		"notes.txt":                  "not an archive",
 	})
+	// Prune orders by age, so the test fixes the modification times.
+	for day := 1; day <= 3; day++ {
+		name := filepath.Join(dir, fmt.Sprintf("2026-11-0%d_10-00-00.tar.gz", day))
+		at := time.Date(2026, 11, day, 10, 0, 0, 0, time.UTC)
+		if err := os.Chtimes(name, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	removed, err := Prune(dir, 2)
 	if err != nil {
@@ -258,5 +267,68 @@ func TestPrune(t *testing.T) {
 	}
 	if removed, err := Prune(filepath.Join(dir, "missing"), 2); err != nil || removed != nil {
 		t.Errorf("Prune(missing) = %v, %v; want nil, nil", removed, err)
+	}
+}
+
+// covers retention per archive class: a safety archive is never the first loss
+func TestPruneKeepsSafetyArchives(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	files := map[string]time.Time{
+		"2026-11-01_10-00-00.tar.gz":             time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC),
+		"2026-11-02_10-00-00.tar.gz":             time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC),
+		"2026-11-03_10-00-00.tar.gz":             time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC),
+		"pre-update_2026-10-01_10-00-00.tar.gz":  time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC),
+		"pre-update_2026-10-02_10-00-00.tar.gz":  time.Date(2026, 10, 2, 10, 0, 0, 0, time.UTC),
+		"pre-restore_2026-10-03_10-00-00.tar.gz": time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC),
+	}
+	contents := make(map[string]string, len(files))
+	for name := range files {
+		contents[name] = name
+	}
+	writeTree(t, dir, contents)
+	for name, at := range files {
+		if err := os.Chtimes(filepath.Join(dir, name), at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Two archives of each class survive: one oldest archive goes from each,
+	// never the whole safety class to keep a routine snapshot.
+	removed, err := Prune(dir, 2)
+	if err != nil {
+		t.Fatalf("Prune() error = %v", err)
+	}
+	if len(removed) != 2 ||
+		removed[0] != "2026-11-01_10-00-00.tar.gz" ||
+		removed[1] != "pre-update_2026-10-01_10-00-00.tar.gz" {
+		t.Fatalf("removed = %v, want the oldest of each class", removed)
+	}
+	for _, name := range []string{
+		"2026-11-02_10-00-00.tar.gz",
+		"2026-11-03_10-00-00.tar.gz",
+		"pre-update_2026-10-02_10-00-00.tar.gz",
+		"pre-restore_2026-10-03_10-00-00.tar.gz",
+	} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("%s was removed: %v", name, err)
+		}
+	}
+
+	// Tightening the retention prunes each class on its own, oldest first.
+	removed, err = Prune(dir, 1)
+	if err != nil {
+		t.Fatalf("Prune() error = %v", err)
+	}
+	if len(removed) != 2 ||
+		removed[0] != "2026-11-02_10-00-00.tar.gz" ||
+		removed[1] != "pre-update_2026-10-02_10-00-00.tar.gz" {
+		t.Fatalf("removed = %v, want the oldest of each class", removed)
+	}
+	for _, name := range []string{"2026-11-03_10-00-00.tar.gz", "pre-restore_2026-10-03_10-00-00.tar.gz"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("%s is gone: %v", name, err)
+		}
 	}
 }

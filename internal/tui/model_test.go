@@ -89,11 +89,13 @@ type fake struct {
 	service  ServiceStatus
 	games    []GameChoice
 
-	follow      <-chan Event
-	followAt    int
-	backupKeep  int
-	serviceOpts ServiceOptions
-	version     string
+	follow        <-chan Event
+	followAt      int
+	backupKeep    int
+	backupEvery   string
+	configureKeep int
+	serviceOpts   ServiceOptions
+	version       string
 
 	panelAddr string
 	panelStop func()
@@ -165,6 +167,12 @@ func (f *fake) backend() Backend {
 			Backups: func(name string) ([]Archive, error) {
 				f.record("backups " + name)
 				return f.archives, f.err
+			},
+			Configure: func(name, every string, keep int) (string, error) {
+				f.backupEvery = every
+				f.configureKeep = keep
+				f.record("configure " + name)
+				return "schedule saved for " + name, f.err
 			},
 		},
 		Logs: LogBackend{
@@ -952,5 +960,92 @@ func TestMemoryFieldBelongsToProjectZomboid(t *testing.T) {
 	}
 	if got := settingsFrom(editor.values()).Memory; got != "4g" {
 		t.Fatalf("settingsFrom lost the memory: %q", got)
+	}
+}
+
+// covers the wizard prefilling the heap and offering the autosave interval
+func TestCreateFormPrefillsTheMemoryAndOffersAutosave(t *testing.T) {
+	t.Parallel()
+	f := &fake{games: []GameChoice{
+		{Name: gameCoreKeeper, Label: "Core Keeper"},
+		{Name: gameProjectZomboid, Label: "Project Zomboid"},
+	}}
+
+	create := newCreateForm(context.Background(), f.backend()).(*form)
+	if got := create.fields[indexOf(t, create.fields, "memory")].value(); got != defaultProjectZomboidMemory {
+		t.Fatalf("memory prefill = %q, want %s", got, defaultProjectZomboidMemory)
+	}
+
+	autosave := indexOf(t, create.fields, "autosave")
+	if create.fields[autosave].visible(create.values()) {
+		t.Fatalf("Core Keeper shows the autosave field")
+	}
+	create.fields[indexOf(t, create.fields, "game")].current = 1
+	if !create.fields[autosave].visible(create.values()) {
+		t.Fatalf("Project Zomboid hides the autosave field")
+	}
+	create.fields[autosave].input.SetValue("20")
+	if got := settingsFrom(create.values()).AutosaveMinutes; got != "20" {
+		t.Fatalf("settingsFrom lost the autosave: %q", got)
+	}
+}
+
+// covers the schedule form saving without stopping the server
+func TestScheduleFormSavesWithoutAStop(t *testing.T) {
+	t.Parallel()
+	f := &fake{}
+
+	var gotEvery string
+	var gotKeep int
+	form := newScheduleForm(context.Background(), f.backend().Server,
+		Item{Name: "Partidita", BackupEvery: "12h", BackupKeep: 4},
+		func(every string, keep int) { gotEvery, gotKeep = every, keep },
+	).(*form)
+
+	if got := form.fields[indexOf(t, form.fields, "every")].value(); got != "12h" {
+		t.Fatalf("every = %q, want the stored schedule", got)
+	}
+	form.fields[indexOf(t, form.fields, "every")].input.SetValue("6h")
+	form.fields[indexOf(t, form.fields, "keep")].input.SetValue("2")
+
+	done := find[formDoneMsg](t, drain(t, form.apply()))
+	if done.err != nil {
+		t.Fatalf("configure: %v", done.err)
+	}
+	if f.backupEvery != "6h" || f.configureKeep != 2 {
+		t.Fatalf("backend got every=%q keep=%d, want 6h and 2", f.backupEvery, f.configureKeep)
+	}
+	if gotEvery != "6h" || gotKeep != 2 {
+		t.Fatalf("the screen kept every=%q keep=%d, want the saved values", gotEvery, gotKeep)
+	}
+	if calls := strings.Join(f.calls, " "); strings.Contains(calls, "stop") {
+		t.Fatalf("calls = %v, want no stop", f.calls)
+	}
+}
+
+// covers the schedule and the newest archive on the backup screen
+func TestBackupsShowsTheSchedule(t *testing.T) {
+	t.Parallel()
+	f := &fake{}
+	screen := newBackups(context.Background(), f.backend().Server, Item{
+		Name: "Partidita", BackupEvery: "24h", BackupKeep: 3,
+	}).(*backups)
+	screen.list = []Archive{{
+		Name:     "2026-11-08_10-00-00.tar.gz",
+		Bytes:    2048,
+		Modified: time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC),
+	}}
+
+	body := screen.View(80, 20)
+	for _, want := range []string{"every 24h, keep 3", "last: 2026-11-08 10:00", "2.0 KiB"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("view missing %q:\n%s", want, body)
+		}
+	}
+
+	// e opens the schedule editor.
+	_, cmd := screen.Update(press("e"))
+	if cmd == nil {
+		t.Fatalf("e produced no command")
 	}
 }

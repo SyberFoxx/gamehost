@@ -126,24 +126,34 @@ Candidates, easiest first:
 - `import-world` accepts any non-empty `*.world.gzip` regular file, writes into the instance's
   `World.Index` slot, and archives `data/` first when it is not empty. Core Keeper saves do not
   start with the gzip magic their extension suggests; never re-add a header check.
-- `config` only edits `instance.json` for values the launch flags consume (players, mode, port,
-  password, game ID, admin password, Project Zomboid memory, cluster token, offline, caves, backup
-  window). Never write `ServerConfig.json`, `Admins.json` or the Project Zomboid ini from it; the
-  server owns those files.
+- `config` only edits `instance.json` for values the launch flags and the driver consume (players,
+  mode, port, password, game ID, admin password, Project Zomboid memory and autosave, cluster token,
+  offline, caves, backup window). Never write `ServerConfig.json`, `Admins.json` or the Project
+  Zomboid ini from it; the driver and the server own those files.
+- `config` splits its settings by who reads them. Launch flags still require a stopped server. The
+  backup schedule applies live because the supervisor reloads the instance every tick. A Project
+  Zomboid heap or autosave change is validated (pure, no file write) and then the running server is
+  restarted by `config` itself; a stopped server only gets the new value saved.
 - The one exception for the Project Zomboid ini is `mods add|remove`: it rewrites only the
-  `WorkshopItems=` and `Mods=` lines, in place, byte for byte, and only while stopped. Do not
-  generalize that write to other keys.
-- The scheduled backup is a maintenance window: stop, archive, prune, start again. `serve` can own
-  the loop, or `service install` can write a systemd timer for it; never both on one instance. A
-  failed archive must still restart the server, so the timer restarts in `ExecStopPost`, never in
-  `ExecStartPost`. `--backup-every` is off by default.
+  `WorkshopItems=` and `Mods=` lines, in place, byte for byte, and only while stopped. The second is
+  the autosave interval, which `game.Preparer` writes into `SaveWorldEveryMinutes=` before a launch
+  (line replacement only, skipped while the ini does not exist yet). Do not generalize those writes
+  to other keys.
+- The scheduled backup is a maintenance window: stop, archive, prune, start again. The supervisor
+  owns the loop, so `start --detach`, the lobby and the systemd unit all get it; `serve` and the
+  panel run no scheduler and there is no systemd timer. A failed archive must still restart the
+  server, and a user stop during the window wins (the phase is no longer `stopping`).
+  `--backup-every` is off by default.
+- Retention prunes two classes independently: timestamped archives keep `keep` newest, and the
+  `pre-*` safety archives keep their own `keep`, both ordered by modification time. Never fold them
+  into one count, or a burst of safety archives deletes the routine snapshots.
 - The systemd unit exports the `DISPLAY` it was installed from. The verified build opens no window
   with `-batchmode`, but an older or future one may, and a headless boot then needs `Xvfb` plus
   `DISPLAY=:99 gamehost service install ...` or the unit fails before reaching its log.
 - `service install` renders the units with `internal/service` and is the only caller of
   `systemctl`. Unit files are rendered text: escape `%` and `$`, quote paths with spaces, and keep
   `KillMode=mixed` so gamehost owns the game's shutdown instead of systemd signaling the whole
-  cgroup. Reinstalling with no schedule must remove the old backup unit and timer.
+  cgroup. `Install` always removes a backup unit or timer left by an older version.
 - `POST /api/instances/{name}/restore` accepts only a bare archive name from the backup directory.
   Keep that check when touching `internal/httpapi`: it is the API's path-traversal guard.
 - Setting `-port` switches the server from Steam relay (SDR) to direct connect and requires
@@ -154,12 +164,17 @@ Candidates, easiest first:
 - Project Zomboid prompts for an admin password on first start, so a headless launch must pass
   `-adminpassword`; max players and the join password live in the ini, not in flags.
 - Project Zomboid has no game ID: players join by address and UDP port (`16261`, direct `16262`).
+- Project Zomboid saves the world on the interval in `SaveWorldEveryMinutes=` of its ini. The value
+  lives in `instance.json` as `autosave_minutes`, and the ini only exists after the first start, so
+  the interval applies from the second launch and the driver skips the write when the file is
+  missing. The live server keeps the value across stop/start; it never resets it.
 - Project Zomboid reads its JVM heap from `-Xmx` in `vmArgs` of `ProjectZomboid64.json`, and
   `update` restores the file SteamCMD ships. `--memory` is stored in `instance.json` and the driver
   rewrites only that entry through `game.Preparer` before every launch, keeping every other key and
   vmArg. Never touch `-Xms` or other vmArgs from gamehost, and never write the json from `config`.
-  An empty value means the shipped default (`8g`); a value larger than `MemTotal` is refused before
-  the launcher runs.
+  `instance.New` stores the shipped default (`8g`) when the user gives no value, so a Project
+  Zomboid instance always carries an explicit heap; a value larger than `MemTotal` is refused before
+  the launcher runs, and `game.Validator` lets `config` refuse it before stopping a running server.
 - The `start-server.sh` script ships from SteamCMD; if it loses the execute bit, `start` fails with
   `permission denied` until it is `chmod +x`.
 - Don't Starve Together is Steam app `343050`; `bin64/dontstarve_dedicated_server_nullrenderer_x64`
@@ -196,17 +211,19 @@ Candidates, easiest first:
   `Esc` on `Files` or `Logs` must stop the child SteamCMD or follower.
 - Forms send a `tui.Settings` of strings and `internal/app` parses it with the same helpers, defaults
   and messages as `create` and `config`. Do not parse or validate in `internal/tui`.
-- The web panel screen starts the same handler `serve` uses, owns the stop function, and also runs
-  the backup scheduler and the boot start. The lobby context shuts the listener down, so
+- The web panel screen starts the same handler `serve` uses, owns the stop function and the boot
+  start. It runs no backup scheduler; the supervisor of each instance owns that. The lobby context
+  shuts the listener down, so
   `servePanel` is the only place that listener is created inside the lobby. Its output goes to
   `io.Discard`: never write to stdout while the alternate screen is up.
 - The log screen restarts its follower when the tail size changes, and every streamed message
   carries a sequence number. Keep it: a cancelled channel that closes late would otherwise mark the
   new stream as finished.
 - The lobby reaches the per-run options with forms, not hidden constants: `Backup` asks for the
-  retention (`--keep`) and prefills the instance value; `Systemd` has an options form for `--dir`,
-  `--binary` and `--systemctl`. A new flag that changes behaviour needs the same treatment or an
-  explicit note that it is command-only.
+  retention (`--keep`) and prefills the instance value, the Backups screen `e` edits the schedule
+  through `ServerBackend.Configure`; `Systemd` has an options form for `--dir`, `--binary` and
+  `--systemctl`. A new flag that changes behaviour needs the same treatment or an explicit note
+  that it is command-only.
 - Foreground `start` has no lobby screen: the alternate screen owns the terminal. The lobby always
   uses the detached supervisor, the same path as `start --detach`.
 - `internal/tui` imports nothing from this project; it receives a `Backend` whose fields are

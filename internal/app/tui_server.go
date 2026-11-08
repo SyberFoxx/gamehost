@@ -21,7 +21,7 @@ func lobbyStart(_ context.Context, name string) (string, error) {
 		return "", err
 	}
 
-	_, logPath, err := prepareStart(s, inst)
+	_, _, logPath, err := prepareStart(s, inst)
 	if err != nil {
 		return "", err
 	}

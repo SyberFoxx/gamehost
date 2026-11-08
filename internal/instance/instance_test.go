@@ -353,9 +353,10 @@ func TestProjectZomboidMemory(t *testing.T) {
 		DataDir:       "/srv/data",
 	}
 
-	// An empty value keeps the game's own default, and a value is normalised.
+	// An empty value stores the heap the game ships with, and a value is
+	// normalised.
 	for value, want := range map[string]string{
-		"":      "",
+		"":      DefaultProjectZomboidMemory,
 		"4g":    "4g",
 		"4G":    "4g",
 		"4096m": "4096m",

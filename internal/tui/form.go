@@ -433,23 +433,24 @@ func (f *form) editingText() bool { return true }
 // settingsFrom reads the shared form values into the adapter settings type.
 func settingsFrom(values map[string]string) Settings {
 	return Settings{
-		Game:          values["game"],
-		Name:          values["name"],
-		WorldName:     values["world"],
-		Seed:          values["seed"],
-		Mode:          values["mode"],
-		MaxPlayers:    values["players"],
-		Port:          values["port"],
-		UDPPort:       values["udp"],
-		Password:      values["password"],
-		AdminPassword: values["admin-password"],
-		Memory:        values["memory"],
-		GameID:        values["game-id"],
-		Network:       values["network"],
-		ClusterToken:  values["cluster-token"],
-		Caves:         values["caves"],
-		BackupEvery:   values["backup-every"],
-		BackupKeep:    values["backup-keep"],
+		Game:            values["game"],
+		Name:            values["name"],
+		WorldName:       values["world"],
+		Seed:            values["seed"],
+		Mode:            values["mode"],
+		MaxPlayers:      values["players"],
+		Port:            values["port"],
+		UDPPort:         values["udp"],
+		Password:        values["password"],
+		AdminPassword:   values["admin-password"],
+		Memory:          values["memory"],
+		AutosaveMinutes: values["autosave"],
+		GameID:          values["game-id"],
+		Network:         values["network"],
+		ClusterToken:    values["cluster-token"],
+		Caves:           values["caves"],
+		BackupEvery:     values["backup-every"],
+		BackupKeep:      values["backup-keep"],
 	}
 }
 
@@ -495,7 +496,8 @@ func newCreateForm(ctx context.Context, backend Backend) screen {
 		textField("udp", "Direct port", "Project Zomboid direct-connect port", ""),
 		textField("password", "Join password", "empty means anyone with the address can join", ""),
 		textField("admin-password", "Admin password", "required on the first start", ""),
-		textField("memory", "Memory", "JVM heap such as 4g; empty uses 8g", ""),
+		textField("memory", "Memory", "JVM heap such as 4g; 8g is the server default", defaultProjectZomboidMemory),
+		textField("autosave", "Autosave", "minutes between world saves; empty keeps the game default", ""),
 		textField("game-id", "Game ID", "empty generates one on the next start", ""),
 		textField("backup-every", "Backup every", "for example 24h; empty is off", ""),
 		textField("backup-keep", "Backup keep", "archives to keep", "5"),
@@ -513,6 +515,7 @@ func newCreateForm(ctx context.Context, backend Backend) screen {
 		"udp":            whenGame(gameProjectZomboid),
 		"admin-password": whenGame(gameProjectZomboid),
 		"memory":         whenGame(gameProjectZomboid),
+		"autosave":       whenGame(gameProjectZomboid),
 	})
 
 	return &form{
@@ -546,7 +549,8 @@ func newSettingsForm(ctx context.Context, backend Backend, settings Settings) sc
 		textField("udp", "Direct port", "Project Zomboid direct-connect port", settings.UDPPort),
 		textField("password", "Join password", "empty means anyone with the address can join", settings.Password),
 		textField("admin-password", "Admin password", "required on the first start", settings.AdminPassword),
-		textField("memory", "Memory", "JVM heap such as 4g; empty uses 8g", settings.Memory),
+		textField("memory", "Memory", "JVM heap such as 4g; 8g is the server default", settings.Memory),
+		textField("autosave", "Autosave", "minutes between world saves; empty keeps the game default", settings.AutosaveMinutes),
 		textField("game-id", "Game ID", "empty generates one on the next start", settings.GameID),
 		textField("backup-every", "Backup every", "for example 24h; empty is off", settings.BackupEvery),
 		textField("backup-keep", "Backup keep", "archives to keep", settings.BackupKeep),
@@ -564,6 +568,7 @@ func newSettingsForm(ctx context.Context, backend Backend, settings Settings) sc
 		"udp":            whenGame(gameProjectZomboid),
 		"admin-password": whenGame(gameProjectZomboid),
 		"memory":         whenGame(gameProjectZomboid),
+		"autosave":       whenGame(gameProjectZomboid),
 	})
 
 	return &form{

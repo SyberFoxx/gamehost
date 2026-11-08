@@ -60,6 +60,7 @@ func lobbyBackend() tui.Backend {
 			Restore:     lobbyRestore,
 			ImportWorld: lobbyImportWorld,
 			Backups:     lobbyBackups,
+			Configure:   lobbyConfigure,
 		},
 		Logs: tui.LogBackend{
 			Follow: lobbyFollow,

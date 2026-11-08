@@ -170,19 +170,36 @@ Los jugadores añaden la dirección y el puerto UDP en *Favorites*: `16261` de j
 directo por defecto. El límite de jugadores y la contraseña de entrada viven en
 `data/Server/base.ini`, que pertenece al servidor.
 
-La memoria del servidor (el *heap* de la JVM) sí la maneja `gamehost`:
+La memoria del servidor (el *heap* de la JVM) sí la maneja `gamehost`, y SIEMPRE queda guardada:
+al crear la instancia se escribe el valor explícito (`8g` si no elegís otro), así `show` nunca
+miente sobre cuánta RAM tiene el servidor.
 
 ```bash
 gamehost create zomboid --game projectzomboid --admin-password "cambia-esto" --memory 4g
-gamehost config zomboid --memory 6g     # con el servidor parado
-gamehost config zomboid --memory ""     # vuelve al valor por defecto, 8g
+gamehost config zomboid --memory 6g     # con el servidor corriendo, lo reinicia
+gamehost config zomboid --memory ""     # vuelve al valor del juego, 8g
 ```
 
 Se aceptan megabytes o gigabytes (`4096m`, `6g`), con un mínimo de `512m`. El valor se escribe en
 `files/ProjectZomboid64.json` antes de cada arranque, porque `update` repone el archivo original; el
 resto de los argumentos de la JVM no se toca. En el TUI es el campo **Memory** del asistente y de
-`Settings`, visible solo para Project Zomboid. Un heap mayor que la RAM total de la máquina se
-rechaza antes de arrancar.
+`Settings`, visible solo para Project Zomboid, y viene precargado con `8g`.
+
+Cambiar el heap con el servidor corriendo lo valida primero y después lo reinicia: si el valor no
+puede arrancar (menos de `512m`, más que la RAM total) se rechaza sin tocar el servidor. Los demás
+flags de arranque (`--port`, `--admin-password`, etc.) siguen exigiendo el servidor parado.
+
+Project Zomboid también puede guardar el mundo solo, en un intervalo que elijas:
+
+```bash
+gamehost config zomboid --autosave 15   # cada 15 minutos; 0 deja el valor del juego
+```
+
+`gamehost` escribe `SaveWorldEveryMinutes=` en `data/Server/<mundo>.ini` antes de cada arranque,
+tocando solo esa línea. El ini aparece después del primer arranque, así que el intervalo se aplica
+desde el segundo; un `config --autosave` con el servidor corriendo lo reinicia y lo aplica al
+instante. En el TUI es el campo **Autosave**. Core Keeper y Don't Starve Together no aceptan este
+flag: guardan cuando quieren.
 
 Mods (solo Project Zomboid):
 
@@ -261,13 +278,25 @@ actuales como `pre-restore_<fecha>.tar.gz`, así que siempre hay vuelta atrás.
 
 ```bash
 gamehost config partidita --backup-every 24h --backup-keep 7
-gamehost serve                     # la ventana la gestiona el panel
-# o, sin dejar nada abierto:
-gamehost service install partidita --enable
 ```
 
-No uses las dos cosas a la vez para la misma instancia. La ventana para el servidor, archiva,
-poda y lo vuelve a arrancar.
+El horario lo posee el supervisor del servidor, o sea el proceso que ya lo mantiene vivo: funciona
+igual con `start --detach`, con el TUI y con la unidad systemd, sin ningún timer aparte. Cuando toca,
+la ventana para el servidor, archiva `data/`, poda y lo vuelve a arrancar. Todo queda en el log de
+esa corrida (`gamehost logs partidita -f`), así que se ve el archivo creado y cada backup viejo
+borrado.
+
+`--backup-every` y `--backup-keep` se pueden cambiar con el servidor corriendo: el supervisor relee
+la instancia cada 30 segundos y toma el horario nuevo sin reiniciar. En el TUI, la pantalla
+`Backups` muestra el horario y el último archivo, y `e` abre un formulario para cambiar intervalo y
+retención.
+
+La retención se aplica por clase: se guardan los `--backup-keep` archivos programados más nuevos y,
+por separado, los `--backup-keep` de seguridad (`pre-update_*`, `pre-restore_*`, `pre-import_*`).
+Una tanda de backups de seguridad nunca se lleva puesto un backup programado.
+
+`gamehost service install` ya no escribe timer: si encuentra uno de una versión anterior lo
+deshabilita y lo borra.
 
 ### Logs y estado
 

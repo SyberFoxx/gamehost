@@ -423,43 +423,54 @@ other terminals or from the HTTP API.
   systemd the supervisor of the supervisor, `Restart=on-failure` brings a crashed server back, and
   `KillMode=mixed` gives gamehost the `SIGTERM` and the full grace period before the cgroup dies;
   `TimeoutStopSec=90` covers the 60s save window plus the state write.
-- `gamehost-<name>-backup.service` is a oneshot window: stop, `gamehost backup`, start. The start
-  lives in `ExecStopPost` because systemd skips `ExecStartPost` when the archive fails.
-- `gamehost-<name>-backup.timer` fires five minutes after boot and then once per `--backup-every`.
+- There is no backup unit and no backup timer: the schedule belongs to the process that runs the
+  server, so the main unit covers every way an instance starts. `service install` removes a timer
+  or unit left by an older install.
 
 The renderer doubles `%` (a specifier) and `$` (a variable), quotes every argument outside a small
 safe set, and exports `GAMEHOST_HOME`, so the unit reads the same data as the terminal even when  systemd's environment differs. It also exports the `DISPLAY` it was installed from: the verified
   build opens no window with `-batchmode`, but a build that initializes graphics would need that
-  session, so a headless host keeps the option of `Xvfb` and a reinstall with `DISPLAY=:99`. It never runs `systemctl`: enabling, starting and removing are CLI decisions. `service uninstall` disables before deleting, so no `.wants` link survives, and
-reinstalling without a schedule removes the old timer.
+  session, so a headless host keeps the option of `Xvfb` and a reinstall with `DISPLAY=:99`. It never runs `systemctl`: enabling, starting and removing are CLI decisions. `service uninstall` disables before deleting, so no `.wants` link survives.
 
 ### Configuration and the backup window
 
 `config` edits `instance.json` for the fields the launch command actually consumes: max players, world
-mode, network mode and port, join password, game ID, admin password, the Project Zomboid heap and the
-backup schedule. It prints the same fields when called without flags. Two decisions shape it:
+mode, network mode and port, join password, game ID, admin password, the Project Zomboid heap, its
+world autosave interval and the backup schedule. It prints the same fields when called without
+flags. Two decisions shape it:
 
 - **It never writes the game's own files.** `ServerConfig.json`, the Project Zomboid ini and
   `Admins.json` belong to the server, which rewrites them; gamehost would be guessing keys it does
   not own. `-maxplayers` and `-worldmode` are flags, so they are safe to change. The exceptions are
   `admin`, which owns no schema of its own — it edits the exact document the server writes, only
-  while stopped, and renumbers the entries the way the server does — and `mods`, which rewrites the
-  two mod lines in place.
-- **It refuses while the server runs.** The values are read once at launch; accepting a change that
-  would silently apply on the next restart would make `show` disagree with the live server.
+  while stopped, and renumbers the entries the way the server does — `mods`, which rewrites the two
+  mod lines in place, and the world autosave interval, which the driver writes into
+  `SaveWorldEveryMinutes=` before a launch.
+- **It distinguishes what a launch reads from what the supervisor reads.** The launch flags
+  (`--port`, `--admin-password`, …) still need a stopped server. The backup schedule applies live:
+  the supervisor reloads the instance every tick. A Project Zomboid heap or autosave change is
+  validated and then applied by restarting a running server, so the setting never waits silently
+  for the next unrelated restart.
 - **The world index is immutable; the name is a launch flag.** `-worldname` is passed on every
   start, so `config --world-name` renames what players see without touching the save. The index
   selects `worlds/<index>.world.gzip` and a different one is a different world, not a setting. The
   seed only matters while a world is being generated, so `config` leaves it alone.
 
-A due backup runs as a maintenance window owned by `serve`, the only long-lived process:
+A due backup runs as a maintenance window owned by the supervisor, the process alive exactly while
+the server runs, so `start --detach`, the lobby and systemd all get it:
 
-1. The scheduler compares the newest archive (or the daemon start, when there is none) with the
+1. The scheduler compares the newest archive (or the start of the run, when there is none) with the
    configured interval.
-2. If the server runs, it is stopped with the normal graceful stop, so the world is closed.
-3. The instance lock is taken, `data/` is archived and retention is applied.
-4. A server that was running is started again, even when the archive failed: a backup problem must
-   not leave the game down.
+2. It stops the server with the normal graceful stop, so the world is closed, and marks the phase
+   `stopping` so a user stop can tell itself apart from the window.
+3. It archives `data/` and applies retention. Retention is per class: scheduled archives keep
+   `keep` newest, and the `pre-*` safety archives keep their own `keep`, ordered by modification
+   time. A burst of safety archives never costs a routine snapshot.
+4. It starts the server again, even when the archive failed, unless the phase is no longer
+   `stopping`: a stop the user asked for during the window wins and the server stays down.
+
+Every step is written to the run log the supervisor already owns, so `gamehost logs` and the lobby
+Logs screen show the archive and each pruned file.
 
 The window costs a few seconds of downtime per interval. The alternative, archiving a live directory,
 can capture a half-written save, which is the failure this project exists to avoid.
@@ -510,13 +521,14 @@ Why this shape:
 | M8 | operation: import, lock, retention | an existing save runs, a second start is refused by the kernel, old logs disappear | `syscall.Flock`, `io.Copy` into an atomic replace, retention |
 | M9 | config, API backups, schedule | settings change without JSON, the panel archives and restores, a window archives and restarts | `time.Duration` config, ticker loop, `os.ReadDir` ordering |
 | M10 | operators: admins, same-origin writes, boot start | a Steam ID becomes an admin without editing JSON, a foreign page cannot stop a world, one unit restores the server after a reboot | struct tags for an external format, `Origin` checks, repeatable flags |
-| M11 | systemd units: `service install`, `service uninstall` | one command writes, enables and starts the server and its backup timer; uninstall leaves no dangling link | text rendering with escaping, `os/exec` for systemctl, filesystem tests |
+| M11 | systemd units: `service install`, `service uninstall` | one command writes, enables and starts the server; uninstall leaves no dangling link and no stale timer | text rendering with escaping, `os/exec` for systemctl, filesystem tests |
 | M12 | interactive lobby | `gamehost` with no arguments on a terminal shows the banner, the selected instance and a menu; start, stop, backup and logs work without typing a flag; a pipe still gets the usage text | the Elm architecture, terminal state ownership, presentation isolated behind a function-valued backend |
 | M13 | the lobby is the whole program | every command is reachable from the lobby: create and edit an instance, install/update with live output, follow the log with a selectable tail, list/create/restore/import backups with the retention form, admins, systemd units with `dir`/`binary`/`systemctl`, `doctor` with the build version and the web panel with the backup schedule and a boot start; destructive actions confirm; `?` shows the command each key replaces | screen stack, streaming over channels, modal state, textinput, form validation at the adapter |
 | M14 | Don't Starve Together driver | a cluster creates, installs, starts offline without a token, writes `cluster.ini`/`server.ini` once, backs up and stops cleanly; an online cluster requires a Klei token and the wizard asks for it | driver-owned files behind `game.Preparer`, per-game validation, a token that stays out of the process argv |
 | M15 | Caves shard and DST admins | `--caves` starts both shards, one stop reaches both, a dying shard takes the instance down, and the lobby adds or removes `KU_...` admins in `adminlist.txt` | multi-process supervision in one process group, driver-owned admin files behind a small interface, per-game id validation |
 | M16 | Project Zomboid mods | `mods add`, `remove` and `list` edit only the two mod lines of the server ini, the lobby has a Mods screen, and every other ini line survives byte for byte | text file editing with in-place line replacement, driver-owned mod store, validation before writing |
 | M17 | configurable server memory | `--memory 4g` and the lobby field change the Project Zomboid heap, the value survives `update` and a restart, every other vmArg is preserved, and an impossible heap is refused before the launcher runs | driver-owned json rewrite behind `game.Preparer`, JVM size parsing shared with the model, `/proc/meminfo` as the sanity bound |
+| M18 | supervisor-owned schedule and live settings | the scheduled window runs for a TUI, detached or systemd server, archives, prunes per class and restarts, every step in the run log; the TUI Backups screen shows the schedule and the newest archive and `e` edits it live; a Project Zomboid heap is always stored, changing it restarts a running server, and `--autosave` sets `SaveWorldEveryMinutes` | a loop behind the existing supervisor, reload-on-tick for live settings, driver-owned ini line rewrite, retention split by archive class |
 
 Each milestone is one work unit: code, tests and doc updates in the same commit.
 
@@ -588,8 +600,8 @@ Each milestone is one work unit: code, tests and doc updates in the same commit.
 - **Units are rendered, not executed.** `internal/service` returns file content, so the layout is
   tested with `t.TempDir()` without a running systemd, and the CLI is the only caller of
   `systemctl`. The unit runs the foreground command, not `serve`, so a crash is restarted by
-  systemd instead of waiting for a daemon loop; when a schedule exists the timer owns the window,
-  and `serve --start` must not be pointed at the same instance.
+  systemd instead of waiting for a daemon loop, and the supervisor inside it owns the backup
+  window like any other start.
 - **The kernel holds the instance lock.** A lock file plus `flock` needs no PID bookkeeping and
   survives crashes: the OS releases it when the process dies. Checking `state.json` first is still
   useful for a clear error, but it is not the guarantee.
@@ -597,9 +609,22 @@ Each milestone is one work unit: code, tests and doc updates in the same commit.
   regular file and a non-empty body, then archives the current `data/` and writes the save through
   a temporary file. The save format is version-specific and does not match its name, so the server
   is the authority on the contents and the pre-import archive is the way back.
-- **The schedule lives in the daemon.** A backup needs a stopped server, and only a long-running
-  process can find that moment. `serve` already owns start and stop, so the window reuses them
-  instead of teaching the supervisor a second lifecycle.
+- **The schedule lives in the supervisor, not in a daemon or a timer.** A backup needs a stopped
+  server, and the supervisor is the one process guaranteed to be alive exactly while the server
+  runs, whatever started it. It already holds `run.lock` for the whole lifetime and already owns
+  the run log, so the window reuses the lifecycle it runs instead of teaching a daemon, a systemd
+  timer and the TUI three copies of the same job.
+- **Live settings reload instead of waiting.** The supervisor reads `instance.json` on every tick,
+  so the schedule can change under a running server; a heap or autosave change cannot apply without
+  a launch, so `config` validates it and restarts the server itself rather than leaving `show`
+  disagreeing with the live process.
+- **The heap is always explicit.** An empty Project Zomboid heap used to mean "whatever
+  `ProjectZomboid64.json` currently has"; since `update` restores that file, the real value was
+  invisible. `instance.New` now stores the shipped default (`8g`), so `show`, the form and the
+  launcher agree.
+- **The world autosave is the driver's one extra ini line.** Project Zomboid reads
+  `SaveWorldEveryMinutes=` from the ini it owns; gamehost writes only that line before a launch,
+  like the heap, and skips a missing ini because the server creates it on the first start.
 - **Game-specific settings stay in the game's own files when the game owns them.** Project Zomboid
   rewrites its ini, so max players and the join password stay there; gamehost only manages what the
   startup flags can express.

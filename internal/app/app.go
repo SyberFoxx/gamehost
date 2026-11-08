@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -292,6 +293,14 @@ func orDefault(value, fallback string) string {
 }
 
 // yesNo names a switch for the show output.
+// intOrEmpty renders a number for a form, where zero means "not set".
+func intOrEmpty(value int) string {
+	if value == 0 {
+		return ""
+	}
+	return strconv.Itoa(value)
+}
+
 func yesNo(value bool) string {
 	if value {
 		return "yes"

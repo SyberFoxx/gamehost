@@ -275,3 +275,108 @@ func TestPrepareRefuses(t *testing.T) {
 		t.Errorf("prepare with a broken launcher error = %v, want the file name", err)
 	}
 }
+
+// writeIni writes a minimal server ini and returns the instance data directory.
+func writeIni(t *testing.T, body string) (string, string) {
+	t.Helper()
+
+	data := t.TempDir()
+	path := filepath.Join(data, "Server", "base.ini")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return data, path
+}
+
+// covers the world autosave interval written into the server ini
+func TestPrepareWritesAutosave(t *testing.T) {
+	t.Parallel()
+
+	dir := writeLauncher(t, launcherJSON)
+	data, ini := writeIni(t, "PVP=true\nSaveWorldEveryMinutes=0\nPublic=true\n")
+	inst := newInstance(t)
+	inst.InstallDir = dir
+	inst.DataDir = data
+	inst.AutosaveMinutes = 15
+
+	if err := prepare(inst, 16<<30); err != nil {
+		t.Fatalf("prepare error = %v", err)
+	}
+	raw, err := os.ReadFile(ini)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "PVP=true\nSaveWorldEveryMinutes=15\nPublic=true\n"
+	if string(raw) != want {
+		t.Errorf("ini = %q, want %q", raw, want)
+	}
+
+	// The same value does not rewrite the file.
+	before, err := os.Stat(ini)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if err := prepare(inst, 16<<30); err != nil {
+		t.Fatalf("second prepare error = %v", err)
+	}
+	after, err := os.Stat(ini)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !before.ModTime().Equal(after.ModTime()) {
+		t.Errorf("an unchanged interval rewrote the ini")
+	}
+
+	// A key the server never wrote is appended.
+	data, ini = writeIni(t, "PVP=true\n")
+	inst.DataDir = data
+	if err := prepare(inst, 16<<30); err != nil {
+		t.Fatalf("prepare error = %v", err)
+	}
+	if raw, err = os.ReadFile(ini); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "SaveWorldEveryMinutes=15\n") {
+		t.Errorf("ini = %q, want the appended key", raw)
+	}
+
+	// The ini only exists after the first start, so a new instance skips it.
+	inst.DataDir = t.TempDir()
+	if err := prepare(inst, 16<<30); err != nil {
+		t.Fatalf("prepare without an ini error = %v", err)
+	}
+
+	// Zero keeps the game default and never touches the file.
+	data, ini = writeIni(t, "SaveWorldEveryMinutes=5\n")
+	inst.DataDir = data
+	inst.AutosaveMinutes = 0
+	if err := prepare(inst, 16<<30); err != nil {
+		t.Fatalf("prepare error = %v", err)
+	}
+	if raw, err = os.ReadFile(ini); err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "SaveWorldEveryMinutes=5\n" {
+		t.Errorf("ini = %q, want the game default kept", raw)
+	}
+}
+
+// covers validating a heap without writing a file
+func TestValidate(t *testing.T) {
+	t.Parallel()
+
+	inst := newInstance(t)
+	inst.Memory = "4g"
+	if err := (Runner{}).Validate(inst); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	inst.Memory = "1t"
+	if err := (Runner{}).Validate(inst); !errors.Is(err, instance.ErrInvalid) {
+		t.Errorf("Validate(1t) error = %v, want ErrInvalid", err)
+	}
+}

@@ -32,14 +32,16 @@ type Event struct {
 
 // Item is one instance, already resolved for display.
 type Item struct {
-	Name       string
-	Game       string
-	Phase      string
-	PID        int
-	StartedAt  time.Time
-	JoinLabel  string
-	JoinValue  string
-	BackupKeep int
+	Name      string
+	Game      string
+	Phase     string
+	PID       int
+	StartedAt time.Time
+	JoinLabel string
+	JoinValue string
+	// BackupEvery is the schedule interval, empty when it is off.
+	BackupEvery string
+	BackupKeep  int
 }
 
 // Detail is the full configuration of one instance.
@@ -54,23 +56,24 @@ type Detail struct {
 // Every value is a string so a form can hold it and the adapter can report the
 // same error the related command prints. Parsing belongs to the adapter.
 type Settings struct {
-	Game          string
-	Name          string
-	WorldName     string
-	Seed          string
-	Mode          string
-	MaxPlayers    string
-	Port          string
-	UDPPort       string
-	Password      string
-	AdminPassword string
-	Memory        string
-	GameID        string
-	Network       string
-	ClusterToken  string
-	Caves         string
-	BackupEvery   string
-	BackupKeep    string
+	Game            string
+	Name            string
+	WorldName       string
+	Seed            string
+	Mode            string
+	MaxPlayers      string
+	Port            string
+	UDPPort         string
+	Password        string
+	AdminPassword   string
+	Memory          string
+	AutosaveMinutes string
+	GameID          string
+	Network         string
+	ClusterToken    string
+	Caves           string
+	BackupEvery     string
+	BackupKeep      string
 }
 
 // Archive is one backup file of an instance.
@@ -149,6 +152,9 @@ type ServerBackend struct {
 	Restore     func(ctx context.Context, name string, archive string) (string, error)
 	ImportWorld func(ctx context.Context, name, path string) (string, error)
 	Backups     func(name string) ([]Archive, error)
+	// Configure saves the backup schedule. The running supervisor reloads it
+	// every tick, so it needs no restart.
+	Configure func(name, every string, keep int) (string, error)
 }
 
 // LogBackend reads and follows the log of an instance.

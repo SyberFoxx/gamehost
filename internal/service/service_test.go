@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // covers the unit names systemctl receives
@@ -23,7 +22,7 @@ func TestUnitNames(t *testing.T) {
 	}
 }
 
-// covers a unit set without a backup window
+// covers the only unit an install writes
 func TestInstallWritesMainUnit(t *testing.T) {
 	t.Parallel()
 
@@ -61,52 +60,34 @@ func TestInstallWritesMainUnit(t *testing.T) {
 	}
 }
 
-// covers the backup service and timer written for a schedule
-func TestInstallWritesBackupUnits(t *testing.T) {
+// covers a stale backup timer from an older install being removed
+func TestInstallRemovesStaleBackupUnits(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
+	for _, name := range []string{TimerUnitName("corekeeper"), BackupUnitName("corekeeper")} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("[Unit]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	written, err := Install(dir, Options{
-		Binary:    "/usr/local/bin/gamehost",
-		Name:      "corekeeper",
-		Home:      "/srv/gamehost",
-		Every:     24 * time.Hour,
-		Keep:      5,
-		Systemctl: "/usr/bin/systemctl",
+		Binary: "/usr/local/bin/gamehost",
+		Name:   "corekeeper",
 	})
 	if err != nil {
 		t.Fatalf("Install() error = %v", err)
 	}
-	if len(written) != 3 {
-		t.Fatalf("written = %v, want three units", written)
+	if len(written) != 1 {
+		t.Fatalf("written = %v, want only the main unit", written)
 	}
 
-	backup := readUnit(t, filepath.Join(dir, "gamehost-corekeeper-backup.service"))
-	for _, want := range []string{
-		"Type=oneshot",
-		"ExecStartPre=-/usr/bin/systemctl --user stop gamehost-corekeeper.service",
-		"ExecStart=/usr/local/bin/gamehost backup corekeeper -keep 5",
-		"ExecStopPost=-/usr/bin/systemctl --user start gamehost-corekeeper.service",
-		"Environment=GAMEHOST_HOME=/srv/gamehost",
-	} {
-		if !strings.Contains(backup, want) {
-			t.Errorf("backup unit missing %q:\n%s", want, backup)
-		}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(backup, "ExecStartPost") {
-		t.Errorf("backup unit restarts in ExecStartPost, which a failed archive skips:\n%s", backup)
-	}
-
-	timer := readUnit(t, filepath.Join(dir, "gamehost-corekeeper-backup.timer"))
-	for _, want := range []string{
-		"OnBootSec=5min",
-		"OnUnitActiveSec=1d",
-		"Unit=gamehost-corekeeper-backup.service",
-		"WantedBy=timers.target",
-	} {
-		if !strings.Contains(timer, want) {
-			t.Errorf("timer missing %q:\n%s", want, timer)
-		}
+	if len(entries) != 1 || entries[0].Name() != UnitName("corekeeper") {
+		t.Errorf("units = %v, want only the main service", entries)
 	}
 }
 
@@ -116,12 +97,9 @@ func TestInstallQuotesUnsafePaths(t *testing.T) {
 
 	dir := t.TempDir()
 	written, err := Install(dir, Options{
-		Binary:    "/tmp/my build/gamehost%20",
-		Name:      "corekeeper",
-		Home:      "/home/ra mses/100% data",
-		Every:     time.Hour,
-		Keep:      2,
-		Systemctl: "/usr/bin/systemctl",
+		Binary: "/tmp/my build/gamehost%20",
+		Name:   "corekeeper",
+		Home:   "/home/ra mses/100% data",
 	})
 	if err != nil {
 		t.Fatalf("Install() error = %v", err)
@@ -146,13 +124,6 @@ func TestInstallRejectsBadOptions(t *testing.T) {
 	}{
 		{"relative binary", Options{Binary: "bin/gamehost", Name: "corekeeper"}},
 		{"empty name", Options{Binary: "/usr/local/bin/gamehost"}},
-		{"negative schedule", Options{Binary: "/usr/local/bin/gamehost", Name: "corekeeper", Every: -time.Hour}},
-		{"schedule without keep", Options{
-			Binary: "/usr/local/bin/gamehost", Name: "corekeeper", Every: time.Hour, Systemctl: "/usr/bin/systemctl",
-		}},
-		{"schedule without systemctl", Options{
-			Binary: "/usr/local/bin/gamehost", Name: "corekeeper", Every: time.Hour, Keep: 2,
-		}},
 	}
 
 	for _, tt := range tests {
@@ -176,11 +147,8 @@ func TestRemove(t *testing.T) {
 
 	dir := t.TempDir()
 	if _, err := Install(dir, Options{
-		Binary:    "/usr/local/bin/gamehost",
-		Name:      "corekeeper",
-		Every:     time.Hour,
-		Keep:      2,
-		Systemctl: "/usr/bin/systemctl",
+		Binary: "/usr/local/bin/gamehost",
+		Name:   "corekeeper",
 	}); err != nil {
 		t.Fatalf("Install() error = %v", err)
 	}
@@ -189,8 +157,8 @@ func TestRemove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Remove() error = %v", err)
 	}
-	if len(removed) != 3 {
-		t.Fatalf("removed = %v, want three units", removed)
+	if len(removed) != 1 {
+		t.Fatalf("removed = %v, want the main unit", removed)
 	}
 	for _, path := range removed {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -235,28 +203,6 @@ func TestDefaultDir(t *testing.T) {
 	})
 }
 
-// covers the short duration form systemd documents
-func TestDuration(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		value time.Duration
-		want  string
-	}{
-		{45 * time.Second, "45s"},
-		{30 * time.Minute, "30m"},
-		{90 * time.Minute, "90m"},
-		{24 * time.Hour, "1d"},
-		{48 * time.Hour, "2d"},
-	}
-
-	for _, tt := range tests {
-		if got := duration(tt.value); got != tt.want {
-			t.Errorf("duration(%s) = %q, want %q", tt.value, got, tt.want)
-		}
-	}
-}
-
 // readUnit returns the content of one written unit file.
 func readUnit(t *testing.T, path string) string {
 	t.Helper()
@@ -266,36 +212,4 @@ func readUnit(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(data)
-}
-
-// covers a disabled schedule removing the units of an earlier install
-func TestInstallWithoutScheduleRemovesTimer(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	opts := Options{
-		Binary:    "/usr/local/bin/gamehost",
-		Name:      "corekeeper",
-		Every:     time.Hour,
-		Keep:      2,
-		Systemctl: "/usr/bin/systemctl",
-	}
-	if _, err := Install(dir, opts); err != nil {
-		t.Fatalf("Install() error = %v", err)
-	}
-
-	opts.Every = 0
-	opts.Keep = 0
-	opts.Systemctl = ""
-	if _, err := Install(dir, opts); err != nil {
-		t.Fatalf("second Install() error = %v", err)
-	}
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 || entries[0].Name() != "gamehost-corekeeper.service" {
-		t.Errorf("units = %v, want only the main service", entries)
-	}
 }
