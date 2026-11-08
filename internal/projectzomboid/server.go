@@ -63,6 +63,9 @@ func (Installer) ServerPath(installDir string) string { return ServerPath(instal
 // Runner exposes the launch contract as a game.Runner.
 type Runner struct{}
 
+// Prepare writes the heap into the launcher json before the launch.
+func (Runner) Prepare(inst instance.Instance) error { return Prepare(inst) }
+
 // Launch returns the command line that starts the server.
 func (Runner) Launch(inst instance.Instance) (game.Launch, error) {
 	return game.Launch{
