@@ -44,7 +44,7 @@ func runServiceInstall(args []string, stdout, stderr io.Writer) error {
 	enable := fs.Bool("enable", false, "enable and start the units now")
 	dir := fs.String("dir", "", "unit directory (default: the systemd user directory)")
 	binary := fs.String("binary", "", "gamehost binary the unit runs (default: this executable)")
-	systemctl := fs.String("systemctl", "", "systemctl used by the backup unit (default: from PATH)")
+	systemctl := fs.String("systemctl", "", "systemctl used by --enable (default: from PATH)")
 	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
 		return usageError(err)
 	}
