@@ -341,3 +341,87 @@ func TestValidate(t *testing.T) {
 		})
 	}
 }
+
+// covers the heap of the project zomboid server
+func TestProjectZomboidMemory(t *testing.T) {
+	t.Parallel()
+
+	base := Options{
+		Game:          GameProjectZomboid,
+		AdminPassword: "secret",
+		InstallDir:    "/srv/files",
+		DataDir:       "/srv/data",
+	}
+
+	// An empty value keeps the game's own default, and a value is normalised.
+	for value, want := range map[string]string{
+		"":      "",
+		"4g":    "4g",
+		"4G":    "4g",
+		"4096m": "4096m",
+		"512m":  "512m",
+		" 2g ":  "2g",
+	} {
+		opts := base
+		opts.Memory = value
+		inst, err := New("zomboid", opts)
+		if err != nil {
+			t.Fatalf("New(memory %q) error = %v", value, err)
+		}
+		if inst.Memory != want {
+			t.Errorf("New(memory %q).Memory = %q, want %q", value, inst.Memory, want)
+		}
+	}
+
+	// Anything the JVM would reject, or would boot with too little memory.
+	for _, value := range []string{"4", "g", "0g", "4x", "-4g", "4 g", "256m", "4.5g", "g4"} {
+		opts := base
+		opts.Memory = value
+		if _, err := New("zomboid", opts); !errors.Is(err, ErrInvalid) {
+			t.Errorf("New(memory %q) error = %v, want ErrInvalid", value, err)
+		}
+	}
+
+	// The field belongs to project zomboid alone.
+	for _, game := range []string{GameCoreKeeper, GameDontStarveTogether} {
+		opts := Options{Game: game, Memory: "4g", InstallDir: "/srv/files", DataDir: "/srv/data"}
+		opts.MaxPlayers = 2
+		if game == GameDontStarveTogether {
+			opts.Offline = true
+		}
+		if _, err := New("server", opts); !errors.Is(err, ErrInvalid) {
+			t.Errorf("New(%s, memory 4g) error = %v, want ErrInvalid", game, err)
+		}
+	}
+}
+
+// covers the bytes a heap setting stands for
+func TestParseMemory(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		in       string
+		wantName string
+		wantByte int64
+	}{
+		{"8g", "8g", 8 << 30},
+		{"4096m", "4096m", 4096 << 20},
+		{"4096M", "4096m", 4096 << 20},
+		{"8G", "8g", 8 << 30},
+	}
+	for _, tt := range tests {
+		name, bytes, err := ParseMemory(tt.in)
+		if err != nil {
+			t.Fatalf("ParseMemory(%q) error = %v", tt.in, err)
+		}
+		if name != tt.wantName || bytes != tt.wantByte {
+			t.Errorf("ParseMemory(%q) = %q, %d; want %q, %d", tt.in, name, bytes, tt.wantName, tt.wantByte)
+		}
+	}
+
+	for _, value := range []string{"", "4", "0g", "4x", "256m"} {
+		if _, _, err := ParseMemory(value); !errors.Is(err, ErrInvalid) {
+			t.Errorf("ParseMemory(%q) error = %v, want ErrInvalid", value, err)
+		}
+	}
+}

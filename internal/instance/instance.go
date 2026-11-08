@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -32,6 +33,13 @@ const (
 	maxPasswordLen     = 28
 	projectZomboidPort = 16261
 
+	// DefaultProjectZomboidMemory is the heap the dedicated server ships with.
+	// An instance without a memory setting keeps this value.
+	DefaultProjectZomboidMemory = "8g"
+	// minProjectZomboidMemory keeps a typo from starting a server the JVM
+	// cannot run: below 512m the game fails to boot.
+	minProjectZomboidMemory = 512 << 20
+
 	// DontStarveTogetherMaxPlayers is the largest lobby the server accepts.
 	DontStarveTogetherMaxPlayers = 64
 	// DontStarveTogetherPort is the default UDP port of a cluster.
@@ -54,7 +62,34 @@ var ErrInvalid = errors.New("invalid instance")
 
 var (
 	namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+	// memoryPattern is a JVM heap size: a number and megabytes or gigabytes.
+	// Smaller units cannot reach the minimum, so they are not accepted.
+	memoryPattern = regexp.MustCompile(`^([0-9]+)([mg])$`)
 )
+
+// memoryUnits are the multipliers of the accepted heap suffixes.
+var memoryUnits = map[string]int64{"m": 1 << 20, "g": 1 << 30}
+
+// ParseMemory validates a JVM heap size such as "4g" or "4096m". It returns the
+// value normalized to lowercase and its size in bytes. An empty value is not a
+// setting and is rejected; callers substitute DefaultProjectZomboidMemory.
+func ParseMemory(value string) (string, int64, error) {
+	raw := strings.ToLower(strings.TrimSpace(value))
+	match := memoryPattern.FindStringSubmatch(raw)
+	if match == nil {
+		return "", 0, fmt.Errorf("memory %q must be a number and a unit, such as 4g or 4096m: %w", value, ErrInvalid)
+	}
+
+	number, err := strconv.ParseInt(match[1], 10, 64)
+	if err != nil {
+		return "", 0, fmt.Errorf("memory %q is not a number: %w", value, ErrInvalid)
+	}
+	bytes := number * memoryUnits[match[2]]
+	if bytes == 0 || bytes < minProjectZomboidMemory {
+		return "", 0, fmt.Errorf("memory %q must be at least %dm: %w", value, minProjectZomboidMemory>>20, ErrInvalid)
+	}
+	return fmt.Sprintf("%d%s", number, match[2]), bytes, nil
+}
 
 // forbiddenGameIDChars are the characters the server rejects in a game ID.
 const forbiddenGameIDChars = "Yyx0O"
@@ -150,7 +185,10 @@ type Instance struct {
 	// driver writes it to cluster_token.txt before the launch.
 	ClusterToken string `json:"cluster_token,omitempty"`
 	// Caves runs the Caves shard next to the Master on the same machine.
-	Caves  bool   `json:"caves,omitempty"`
+	Caves bool `json:"caves,omitempty"`
+	// Memory is the JVM heap of the Project Zomboid server, such as "4g". An
+	// empty value keeps DefaultProjectZomboidMemory.
+	Memory string `json:"memory,omitempty"`
 	Backup Backup `json:"backup"`
 }
 
@@ -169,6 +207,7 @@ type Options struct {
 	ClusterToken  string
 	Offline       bool
 	Caves         bool
+	Memory        string
 	BackupEvery   string
 	BackupKeep    int
 	InstallDir    string
@@ -234,6 +273,17 @@ func New(name string, opts Options) (Instance, error) {
 		backup.Keep = DefaultBackupKeep
 	}
 
+	// The heap is stored normalized, so two spellings never look like two
+	// different settings.
+	memory := opts.Memory
+	if memory != "" {
+		normalized, err := normalizeMemory(memory)
+		if err != nil {
+			return Instance{}, err
+		}
+		memory = normalized
+	}
+
 	inst := Instance{
 		Name:          name,
 		Game:          game,
@@ -246,12 +296,22 @@ func New(name string, opts Options) (Instance, error) {
 		AdminPassword: opts.AdminPassword,
 		ClusterToken:  opts.ClusterToken,
 		Caves:         opts.Caves,
+		Memory:        memory,
 		Backup:        backup,
 	}
 	if err := inst.Validate(); err != nil {
 		return Instance{}, err
 	}
 	return inst, nil
+}
+
+// normalizeMemory returns the canonical spelling of a heap setting.
+func normalizeMemory(value string) (string, error) {
+	name, _, err := ParseMemory(value)
+	if err != nil {
+		return "", err
+	}
+	return name, nil
 }
 
 // ValidateName rejects names that are unsafe as directory components.
@@ -313,6 +373,9 @@ func (i Instance) validateCoreKeeper() error {
 	if i.AdminPassword != "" {
 		return fmt.Errorf("admin password is only used by project zomboid: %w", ErrInvalid)
 	}
+	if i.Memory != "" {
+		return fmt.Errorf("memory is only used by project zomboid: %w", ErrInvalid)
+	}
 	if i.Caves {
 		return fmt.Errorf("the caves shard belongs to don't starve together: %w", ErrInvalid)
 	}
@@ -349,6 +412,12 @@ func (i Instance) validateProjectZomboid() error {
 	if i.AdminPassword == "" {
 		return fmt.Errorf("admin password is required for project zomboid: %w", ErrInvalid)
 	}
+	// The heap is written into the launcher json before every start.
+	if i.Memory != "" {
+		if _, _, err := ParseMemory(i.Memory); err != nil {
+			return err
+		}
+	}
 	if i.Network.Mode != NetworkDirect {
 		return fmt.Errorf("project zomboid always uses direct connections: %w", ErrInvalid)
 	}
@@ -380,6 +449,9 @@ func (i Instance) validateDontStarveTogether() error {
 	}
 	if i.AdminPassword != "" {
 		return fmt.Errorf("admin password is only used by project zomboid: %w", ErrInvalid)
+	}
+	if i.Memory != "" {
+		return fmt.Errorf("memory is only used by project zomboid: %w", ErrInvalid)
 	}
 	// The join password lives in cluster.ini, which the server owns.
 	if i.Network.Password != "" {
