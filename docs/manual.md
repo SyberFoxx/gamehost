@@ -77,7 +77,7 @@ Lo que hace cada pantalla:
 | --- | --- | --- |
 | New instance | asistente con validación; oculta los campos que el juego no usa | `create` |
 | Details | configuración y estado de solo lectura | `show`, `status` |
-| Settings | edita lo que leen los flags; exige servidor parado | `config` |
+| Settings | edita lo que leen los flags, incluida la memoria de Project Zomboid; exige servidor parado | `config` |
 | Files | instala o actualiza con la salida de SteamCMD en vivo (`Esc` cancela) | `install`, `update` |
 | Logs | últimas líneas y seguimiento en vivo; `G` vuelve al final, `n` cambia el tamaño | `logs -f`, `logs -n` |
 | Backups | `b` archiva (pregunta retención), `Enter` restaura, `i` importa un mundo | `backup`, `restore`, `import-world` |
@@ -169,6 +169,20 @@ gamehost start zomboid --detach
 Los jugadores añaden la dirección y el puerto UDP en *Favorites*: `16261` de juego y `16262`
 directo por defecto. El límite de jugadores y la contraseña de entrada viven en
 `data/Server/base.ini`, que pertenece al servidor.
+
+La memoria del servidor (el *heap* de la JVM) sí la maneja `gamehost`:
+
+```bash
+gamehost create zomboid --game projectzomboid --admin-password "cambia-esto" --memory 4g
+gamehost config zomboid --memory 6g     # con el servidor parado
+gamehost config zomboid --memory ""     # vuelve al valor por defecto, 8g
+```
+
+Se aceptan megabytes o gigabytes (`4096m`, `6g`), con un mínimo de `512m`. El valor se escribe en
+`files/ProjectZomboid64.json` antes de cada arranque, porque `update` repone el archivo original; el
+resto de los argumentos de la JVM no se toca. En el TUI es el campo **Memory** del asistente y de
+`Settings`, visible solo para Project Zomboid. Un heap mayor que la RAM total de la máquina se
+rechaza antes de arrancar.
 
 Mods (solo Project Zomboid):
 

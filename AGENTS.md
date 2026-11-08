@@ -127,8 +127,9 @@ Candidates, easiest first:
   `World.Index` slot, and archives `data/` first when it is not empty. Core Keeper saves do not
   start with the gzip magic their extension suggests; never re-add a header check.
 - `config` only edits `instance.json` for values the launch flags consume (players, mode, port,
-  password, game ID, admin password, cluster token, offline, caves, backup window). Never write
-  `ServerConfig.json`, `Admins.json` or the Project Zomboid ini from it; the server owns those files.
+  password, game ID, admin password, Project Zomboid memory, cluster token, offline, caves, backup
+  window). Never write `ServerConfig.json`, `Admins.json` or the Project Zomboid ini from it; the
+  server owns those files.
 - The one exception for the Project Zomboid ini is `mods add|remove`: it rewrites only the
   `WorkshopItems=` and `Mods=` lines, in place, byte for byte, and only while stopped. Do not
   generalize that write to other keys.
@@ -153,6 +154,12 @@ Candidates, easiest first:
 - Project Zomboid prompts for an admin password on first start, so a headless launch must pass
   `-adminpassword`; max players and the join password live in the ini, not in flags.
 - Project Zomboid has no game ID: players join by address and UDP port (`16261`, direct `16262`).
+- Project Zomboid reads its JVM heap from `-Xmx` in `vmArgs` of `ProjectZomboid64.json`, and
+  `update` restores the file SteamCMD ships. `--memory` is stored in `instance.json` and the driver
+  rewrites only that entry through `game.Preparer` before every launch, keeping every other key and
+  vmArg. Never touch `-Xms` or other vmArgs from gamehost, and never write the json from `config`.
+  An empty value means the shipped default (`8g`); a value larger than `MemTotal` is refused before
+  the launcher runs.
 - The `start-server.sh` script ships from SteamCMD; if it loses the execute bit, `start` fails with
   `permission denied` until it is `chmod +x`.
 - Don't Starve Together is Steam app `343050`; `bin64/dontstarve_dedicated_server_nullrenderer_x64`

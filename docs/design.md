@@ -221,7 +221,7 @@ graph TD
 | `internal/game` | driver contracts: install args, launch, join, session id and optional startup files | M7, M14 |
 | `internal/games` | registry that resolves a game name to its driver | M7 |
 | `internal/corekeeper` | Core Keeper driver: args, binary, `GameID.txt` | M3 |
-| `internal/projectzomboid` | Project Zomboid driver: Steam app, `start-server.sh`, ports | M7 |
+| `internal/projectzomboid` | Project Zomboid driver: Steam app, `start-server.sh`, ports, launcher heap | M7, M17 |
 | `internal/dontstarvetogether` | Don't Starve Together driver: Steam app, cluster files, token, offline mode | M14 |
 | `internal/steamcmd` | install/update a dedicated server through SteamCMD | M1 |
 | `internal/backup` | tar.gz snapshots of the data directory with retention | M5 |
@@ -251,6 +251,7 @@ type Instance struct {
     MaxPlayers    int    // corekeeper and dontstarvetogether
     GameID        string // corekeeper only
     AdminPassword string // projectzomboid only
+    Memory        string // projectzomboid only: the JVM heap, such as "4g"
     ClusterToken  string // dontstarvetogether online only
     Caves         bool   // dontstarvetogether only
 }
@@ -275,9 +276,9 @@ type Backup struct {
 }
 ```
 
-Two fields are game-specific: `AdminPassword` (Project Zomboid) and `Network.UDPPort` (Project
-Zomboid's direct port). Validation is per game, so a Core Keeper instance rejects them and a Project
-Zomboid one rejects world index, seed, mode, game ID and join password.
+Three fields are game-specific: `AdminPassword` and `Memory` (Project Zomboid) and
+`Network.UDPPort` (Project Zomboid's direct port). Validation is per game, so a Core Keeper instance
+rejects them and a Project Zomboid one rejects world index, seed, mode, game ID and join password.
 
 Runtime state is separate from configuration, so a crashed server never corrupts the config:
 
@@ -435,14 +436,15 @@ reinstalling without a schedule removes the old timer.
 ### Configuration and the backup window
 
 `config` edits `instance.json` for the fields the launch command actually consumes: max players, world
-mode, network mode and port, join password, game ID, admin password and the backup schedule. It
-prints the same fields when called without flags. Two decisions shape it:
+mode, network mode and port, join password, game ID, admin password, the Project Zomboid heap and the
+backup schedule. It prints the same fields when called without flags. Two decisions shape it:
 
 - **It never writes the game's own files.** `ServerConfig.json`, the Project Zomboid ini and
   `Admins.json` belong to the server, which rewrites them; gamehost would be guessing keys it does
-  not own. `-maxplayers` and `-worldmode` are flags, so they are safe to change. The one exception
-  is `admin`, which owns no schema of its own: it edits the exact document the server writes, only
-  while stopped, and renumbers the entries the way the server does.
+  not own. `-maxplayers` and `-worldmode` are flags, so they are safe to change. The exceptions are
+  `admin`, which owns no schema of its own — it edits the exact document the server writes, only
+  while stopped, and renumbers the entries the way the server does — and `mods`, which rewrites the
+  two mod lines in place.
 - **It refuses while the server runs.** The values are read once at launch; accepting a change that
   would silently apply on the next restart would make `show` disagree with the live server.
 - **The world index is immutable; the name is a launch flag.** `-worldname` is passed on every
@@ -514,6 +516,7 @@ Why this shape:
 | M14 | Don't Starve Together driver | a cluster creates, installs, starts offline without a token, writes `cluster.ini`/`server.ini` once, backs up and stops cleanly; an online cluster requires a Klei token and the wizard asks for it | driver-owned files behind `game.Preparer`, per-game validation, a token that stays out of the process argv |
 | M15 | Caves shard and DST admins | `--caves` starts both shards, one stop reaches both, a dying shard takes the instance down, and the lobby adds or removes `KU_...` admins in `adminlist.txt` | multi-process supervision in one process group, driver-owned admin files behind a small interface, per-game id validation |
 | M16 | Project Zomboid mods | `mods add`, `remove` and `list` edit only the two mod lines of the server ini, the lobby has a Mods screen, and every other ini line survives byte for byte | text file editing with in-place line replacement, driver-owned mod store, validation before writing |
+| M17 | configurable server memory | `--memory 4g` and the lobby field change the Project Zomboid heap, the value survives `update` and a restart, every other vmArg is preserved, and an impossible heap is refused before the launcher runs | driver-owned json rewrite behind `game.Preparer`, JVM size parsing shared with the model, `/proc/meminfo` as the sanity bound |
 
 Each milestone is one work unit: code, tests and doc updates in the same commit.
 
@@ -621,6 +624,14 @@ Each milestone is one work unit: code, tests and doc updates in the same commit.
   `ps` would show it to every user. The ini files are created only when missing: the server appends
   its own sections and the player owns every setting gamehost does not model, so a rewrite would be
   a data loss bug dressed as idempotence.
+- **The Project Zomboid heap lives in the launcher json.** The dedicated server takes `-Xmx` from
+  `vmArgs` in `ProjectZomboid64.json`, not from a startup flag, and `update` restores the file
+  SteamCMD ships. The driver therefore rewrites exactly that entry before every start, through the
+  same `Preparer` hook; every other key and every other vmArg survives, including future ones, and
+  the file is written only when the value changes. gamehost owns `-Xmx` and nothing else: `-Xms`
+  and the rest stay as the game wrote them. The file's key order may change on the first rewrite,
+  which the launcher does not care about. A heap larger than the machine's `MemTotal` is refused
+  before the process exists, because the JVM would only fail later with an opaque message.
 - **The lobby is a front end, not a second program.** `internal/tui` imports nothing from this
   project: it receives a `Backend` whose fields are functions, and `internal/app` fills them with
   the same helpers the commands call. The lobby never shells out to `gamehost`, so a phase, a grace

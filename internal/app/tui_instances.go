@@ -240,6 +240,7 @@ func projectZomboidOptions(settings tui.Settings, opts instance.Options) (instan
 	opts.Port = port
 	opts.UDPPort = udp
 	opts.AdminPassword = settings.AdminPassword
+	opts.Memory = settings.Memory
 	opts.BackupEvery = every
 	opts.BackupKeep = keep
 	return opts, nil
@@ -304,6 +305,7 @@ func settingsOf(inst instance.Instance) tui.Settings {
 		UDPPort:       strconv.Itoa(inst.Network.UDPPort),
 		Password:      inst.Network.Password,
 		AdminPassword: inst.AdminPassword,
+		Memory:        inst.Memory,
 		GameID:        inst.GameID,
 		Network:       inst.Network.Mode,
 		ClusterToken:  inst.ClusterToken,

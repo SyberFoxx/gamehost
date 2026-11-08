@@ -23,6 +23,7 @@ func runCreate(args []string, stdout, stderr io.Writer) error {
 	udpPort := fs.Int("udp-port", 0, "direct-connect port (projectzomboid only), default game port + 1")
 	password := fs.String("password", "", "join password, at most 28 characters (corekeeper only)")
 	adminPassword := fs.String("admin-password", "", "admin password (projectzomboid only)")
+	memory := fs.String("memory", "", "JVM heap such as 4g or 4096m (projectzomboid only), empty uses 8g")
 	gameID := fs.String("game-id", "", "fixed game ID, 15-28 alphanumeric characters (corekeeper only)")
 	clusterToken := fs.String("cluster-token", "", "Klei cluster token (dontstarvetogether online only)")
 	offline := fs.Bool("offline", false, "LAN-only cluster without a Klei token (dontstarvetogether only)")
@@ -72,6 +73,7 @@ func runCreate(args []string, stdout, stderr io.Writer) error {
 		opts.Port = *port
 		opts.UDPPort = *udpPort
 		opts.AdminPassword = *adminPassword
+		opts.Memory = *memory
 	case instance.GameDontStarveTogether:
 		opts.MaxPlayers = *maxPlayers
 		opts.Port = *port
@@ -137,6 +139,7 @@ var flagGames = map[string][]string{
 	"name":           {instance.GameCoreKeeper},
 	"udp-port":       {instance.GameProjectZomboid},
 	"admin-password": {instance.GameProjectZomboid},
+	"memory":         {instance.GameProjectZomboid},
 	"cluster-token":  {instance.GameDontStarveTogether},
 	"offline":        {instance.GameDontStarveTogether},
 	"caves":          {instance.GameDontStarveTogether},
@@ -175,6 +178,7 @@ func optionsOf(inst instance.Instance) instance.Options {
 		UDPPort:       inst.Network.UDPPort,
 		Password:      inst.Network.Password,
 		AdminPassword: inst.AdminPassword,
+		Memory:        inst.Memory,
 		GameID:        inst.GameID,
 		ClusterToken:  inst.ClusterToken,
 		Offline:       inst.Network.Mode == instance.NetworkOffline,
@@ -260,6 +264,7 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	udpPort := fs.Int("udp-port", 0, "direct-connect port (projectzomboid only)")
 	password := fs.String("password", "", "join password, empty clears it (corekeeper only)")
 	adminPassword := fs.String("admin-password", "", "admin password (projectzomboid only)")
+	memory := fs.String("memory", "", "JVM heap such as 4g or 4096m (projectzomboid only), empty uses 8g")
 	gameID := fs.String("game-id", "", "fixed game ID, empty generates one on the next start (corekeeper only)")
 	backupEvery := fs.String("backup-every", "", "scheduled backup interval such as 24h; off disables it")
 	backupKeep := fs.Int("backup-keep", 0, "scheduled archives to keep")
@@ -333,6 +338,9 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		if set["admin-password"] {
 			opts.AdminPassword = *adminPassword
 		}
+		if set["memory"] {
+			opts.Memory = *memory
+		}
 	case instance.GameDontStarveTogether:
 		if set["max-players"] {
 			opts.MaxPlayers = *maxPlayers
@@ -391,6 +399,7 @@ func instanceRows(inst instance.Instance) [][2]string {
 		return append(rows,
 			[2]string{"direct port", fmt.Sprint(inst.Network.UDPPort)},
 			[2]string{"admin password", orDefault(inst.AdminPassword, "(none)")},
+			[2]string{"memory", orDefault(inst.Memory, instance.DefaultProjectZomboidMemory+" (default)")},
 			[2]string{"max players", "from the server ini"},
 			[2]string{"scheduled backup", backupSummary(inst.Backup)},
 		)
