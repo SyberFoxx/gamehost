@@ -84,26 +84,21 @@ func installService(s *store.Store, inst instance.Instance, opts serviceInstallO
 		return err
 	}
 
-	every := inst.Backup.Interval()
-	// Turning the schedule off removes the timer file, so disable it first or
-	// systemd keeps a dangling link and fires a missing unit.
-	if every == 0 {
-		timer := service.TimerUnitName(inst.Name)
-		if _, err := os.Stat(filepath.Join(unitDir, timer)); err == nil && ctl != "" {
-			if err := runSystemctl(ctl, "disable", "--now", timer); err != nil {
-				fmt.Fprintf(stderr, "warning: %v\n", err)
-			}
+	// A timer from an older install would duplicate the supervisor's own
+	// window, so disable it before removing the file or systemd keeps a
+	// dangling link and fires a missing unit.
+	timer := service.TimerUnitName(inst.Name)
+	if _, err := os.Stat(filepath.Join(unitDir, timer)); err == nil && ctl != "" {
+		if err := runSystemctl(ctl, "disable", "--now", timer); err != nil {
+			fmt.Fprintf(stderr, "warning: %v\n", err)
 		}
 	}
 
 	unit := service.Options{
-		Binary:    exe,
-		Name:      inst.Name,
-		Home:      root,
-		Display:   os.Getenv("DISPLAY"),
-		Every:     every,
-		Keep:      inst.Backup.Retention(),
-		Systemctl: ctl,
+		Binary:  exe,
+		Name:    inst.Name,
+		Home:    root,
+		Display: os.Getenv("DISPLAY"),
 	}
 	written, err := service.Install(unitDir, unit)
 	if err != nil {
@@ -116,11 +111,15 @@ func installService(s *store.Store, inst instance.Instance, opts serviceInstallO
 		fmt.Fprintf(stdout, "note: %s is a temporary go run binary; build one with: make build, then pass --binary\n", exe)
 	}
 
+	// The schedule lives in the supervisor, so it is worth stating whether or
+	// not the units are enabled right now.
+	if every := inst.Backup.Interval(); every > 0 {
+		fmt.Fprintf(stdout, "scheduled backups: every %s, keeping %d archives, owned by the running server\n",
+			every, inst.Backup.Retention())
+	}
+
 	if !opts.Enable {
 		fmt.Fprintf(stdout, "\nnext:\n  systemctl --user daemon-reload\n  systemctl --user enable --now %s\n", service.UnitName(inst.Name))
-		if every > 0 {
-			fmt.Fprintf(stdout, "  systemctl --user enable --now %s\n", service.TimerUnitName(inst.Name))
-		}
 		return nil
 	}
 
@@ -132,11 +131,6 @@ func installService(s *store.Store, inst instance.Instance, opts serviceInstallO
 	}
 	if err := runSystemctl(ctl, "enable", service.UnitName(inst.Name)); err != nil {
 		return fmt.Errorf("units written, but enabling failed: %w", err)
-	}
-	if every > 0 {
-		if err := runSystemctl(ctl, "enable", service.TimerUnitName(inst.Name)); err != nil {
-			return fmt.Errorf("units written, but enabling the timer failed: %w", err)
-		}
 	}
 
 	state, err := s.LoadState(inst.Name)
@@ -157,12 +151,6 @@ func installService(s *store.Store, inst instance.Instance, opts serviceInstallO
 			return fmt.Errorf("units enabled, but starting failed: %w", err)
 		}
 		fmt.Fprintf(stdout, "\nstarted %s\n", service.UnitName(inst.Name))
-	}
-	if every > 0 {
-		if err := runSystemctl(ctl, "start", service.TimerUnitName(inst.Name)); err != nil {
-			return fmt.Errorf("timer enabled, but starting it failed: %w", err)
-		}
-		fmt.Fprintf(stdout, "backup every %s, keeping %d archives\n", every, inst.Backup.Retention())
 	}
 	fmt.Fprintf(stdout, "logs: journalctl --user -u %s -f\n", service.UnitName(inst.Name))
 	return nil

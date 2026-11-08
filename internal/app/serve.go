@@ -44,9 +44,6 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	}
 
 	server := newPanelServer(s)
-	// The daemon owns the schedule: a backup needs a stopped server, and only a
-	// long-running process can provide the window.
-	go newBackupScheduler(s, stdout).Run(ctx)
 	fmt.Fprintf(stdout, "serving http://%s\npress Ctrl+C to stop\n", listener.Addr())
 
 	serveErr := make(chan error, 1)
@@ -100,7 +97,7 @@ func startBootInstances(s *store.Store, names []string, out io.Writer) {
 
 // startInstance starts one instance in the background and waits until it runs.
 func startInstance(s *store.Store, inst instance.Instance, stdout io.Writer) error {
-	_, logPath, err := prepareStart(s, inst)
+	_, _, logPath, err := prepareStart(s, inst)
 	if err != nil {
 		return err
 	}

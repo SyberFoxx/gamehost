@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/syberfoxx/gamehost/internal/atomicfile"
 )
@@ -23,12 +22,6 @@ type Options struct {
 	Home string
 	// Display is exported as DISPLAY; Core Keeper opens a window even with -batchmode.
 	Display string
-	// Every is the backup window; zero writes no backup units.
-	Every time.Duration
-	// Keep is how many archives the backup window keeps.
-	Keep int
-	// Systemctl is the absolute path the backup unit uses to stop and start the server.
-	Systemctl string
 }
 
 // unit is one unit file to write.
@@ -73,38 +66,19 @@ func Install(dir string, opts Options) ([]string, error) {
 	if opts.Name == "" {
 		return nil, errors.New("instance name is required")
 	}
-	if opts.Every < 0 {
-		return nil, fmt.Errorf("backup interval %s cannot be negative", opts.Every)
-	}
-	if opts.Every > 0 {
-		if opts.Keep < 1 {
-			return nil, fmt.Errorf("backup keep %d must be at least 1 with a schedule", opts.Keep)
-		}
-		if !filepath.IsAbs(opts.Systemctl) {
-			return nil, fmt.Errorf("systemctl path %q must be absolute with a backup schedule", opts.Systemctl)
-		}
-	}
-
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create %q: %w", dir, err)
 	}
 
-	// A schedule that was turned off must not leave an older timer behind.
-	if opts.Every == 0 {
-		for _, name := range []string{TimerUnitName(opts.Name), BackupUnitName(opts.Name)} {
-			if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return nil, fmt.Errorf("remove stale unit %q: %w", name, err)
-			}
+	// The schedule belongs to the supervisor that runs the server, so an older
+	// timer from a previous install would only duplicate or outlive it.
+	for _, name := range []string{TimerUnitName(opts.Name), BackupUnitName(opts.Name)} {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("remove stale unit %q: %w", name, err)
 		}
 	}
 
 	units := []unit{{UnitName(opts.Name), mainUnit(opts)}}
-	if opts.Every > 0 {
-		units = append(units,
-			unit{BackupUnitName(opts.Name), backupUnit(opts)},
-			unit{TimerUnitName(opts.Name), timerUnit(opts)},
-		)
-	}
 
 	written := make([]string, 0, len(units))
 	for _, u := range units {
@@ -157,52 +131,6 @@ func mainUnit(opts Options) string {
 	}
 	b.WriteString("\n[Install]\nWantedBy=default.target\n")
 	return b.String()
-}
-
-// backupUnit stops the server, archives it and brings it back. ExecStopPost
-// runs even when the archive fails, so a broken backup never leaves it down.
-func backupUnit(opts Options) string {
-	var b strings.Builder
-	b.WriteString("[Unit]\n")
-	fmt.Fprintf(&b, "Description=gamehost: backup window for %s\n\n", opts.Name)
-
-	b.WriteString("[Service]\n")
-	b.WriteString("Type=oneshot\n")
-	fmt.Fprintf(&b, "ExecStartPre=-%s --user stop %s\n", arg(opts.Systemctl), arg(UnitName(opts.Name)))
-	fmt.Fprintf(&b, "ExecStart=%s backup %s -keep %d\n", arg(opts.Binary), arg(opts.Name), opts.Keep)
-	fmt.Fprintf(&b, "ExecStopPost=-%s --user start %s\n", arg(opts.Systemctl), arg(UnitName(opts.Name)))
-	if opts.Home != "" {
-		fmt.Fprintf(&b, "Environment=%s\n", envArg("GAMEHOST_HOME="+opts.Home))
-	}
-	return b.String()
-}
-
-// timerUnit fires the backup unit after boot and then once per interval.
-func timerUnit(opts Options) string {
-	var b strings.Builder
-	b.WriteString("[Unit]\n")
-	fmt.Fprintf(&b, "Description=gamehost: periodic backup for %s\n\n", opts.Name)
-
-	b.WriteString("[Timer]\n")
-	b.WriteString("OnBootSec=5min\n")
-	fmt.Fprintf(&b, "OnUnitActiveSec=%s\n", duration(opts.Every))
-	fmt.Fprintf(&b, "Unit=%s\n", BackupUnitName(opts.Name))
-	b.WriteString("\n[Install]\nWantedBy=timers.target\n")
-	return b.String()
-}
-
-// duration renders a Go duration in the short form systemd documents.
-func duration(value time.Duration) string {
-	switch {
-	case value%(24*time.Hour) == 0:
-		return fmt.Sprintf("%dd", value/(24*time.Hour))
-	case value%time.Hour == 0:
-		return fmt.Sprintf("%dh", value/time.Hour)
-	case value%time.Minute == 0:
-		return fmt.Sprintf("%dm", value/time.Minute)
-	default:
-		return fmt.Sprintf("%ds", value/time.Second)
-	}
 }
 
 // arg renders one ExecStart argument. systemd expands % specifiers and

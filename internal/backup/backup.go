@@ -18,6 +18,12 @@ import (
 // archiveSuffix marks every file this package creates.
 const archiveSuffix = ".tar.gz"
 
+// safetyPrefix marks the archives written before a destructive operation.
+// They are a different class from the scheduled ones and get their own
+// retention: a prune must never throw a safety net away to keep a routine
+// snapshot.
+const safetyPrefix = "pre-"
+
 // Result describes a written archive.
 type Result struct {
 	Path  string
@@ -287,37 +293,44 @@ func Newest(dir string) (time.Time, bool, error) {
 	return archives[0].Modified, true, nil
 }
 
-// Prune deletes the oldest archives, keeping the newest keep files.
-// It returns the removed file names.
+// Prune removes the oldest archives in dir, keeping keep of each class:
+// timestamped backups and the pre-* safety archives written before an update,
+// restore or import. The classes are pruned independently, so a burst of safety
+// archives never costs a scheduled backup. Age is the modification time, the
+// same order List uses.
 func Prune(dir string, keep int) ([]string, error) {
 	if keep < 1 {
 		return nil, fmt.Errorf("keep must be at least 1")
 	}
-	entries, err := os.ReadDir(dir)
+	archives, err := List(dir)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("list backups %q: %w", dir, err)
+		return nil, err
 	}
 
-	var names []string
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), archiveSuffix) {
+	var timed, safety []string
+	for _, archive := range archives { // newest first
+		if strings.HasPrefix(archive.Name, safetyPrefix) {
+			safety = append(safety, archive.Name)
 			continue
 		}
-		names = append(names, entry.Name())
-	}
-	slices.Sort(names)
-	if len(names) <= keep {
-		return nil, nil
+		timed = append(timed, archive.Name)
 	}
 
-	removed := names[:len(names)-keep]
+	removed := append(excess(timed, keep), excess(safety, keep)...)
 	for _, name := range removed {
 		if err := os.Remove(filepath.Join(dir, name)); err != nil {
 			return removed, fmt.Errorf("remove backup %q: %w", name, err)
 		}
 	}
 	return removed, nil
+}
+
+// excess returns the names beyond keep from a newest-first slice, oldest first.
+func excess(names []string, keep int) []string {
+	if len(names) <= keep {
+		return nil
+	}
+	out := slices.Clone(names[keep:])
+	slices.Reverse(out)
+	return out
 }

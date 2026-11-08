@@ -1181,7 +1181,7 @@ func TestServeBootStarts(t *testing.T) {
 	}
 }
 
-// covers writing the units of an instance with a backup window
+// covers writing the unit of an instance with a backup schedule
 func TestServiceInstall(t *testing.T) {
 	t.Setenv("GAMEHOST_HOME", t.TempDir())
 	t.Setenv("DISPLAY", ":0")
@@ -1195,26 +1195,33 @@ func TestServiceInstall(t *testing.T) {
 	}
 	unitDir := t.TempDir()
 
+	// A timer from an older install must not survive and duplicate the window.
+	stale := filepath.Join(unitDir, "gamehost-corekeeper-backup.timer")
+	if err := os.WriteFile(stale, []byte("[Unit]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	out, err := runArgs(t, "service", "install", "corekeeper",
 		"--dir", unitDir, "--binary", exe, "--systemctl", "/usr/bin/systemctl")
 	if err != nil {
 		t.Fatalf("service install error = %v", err)
 	}
 	if !strings.Contains(out, "wrote "+filepath.Join(unitDir, "gamehost-corekeeper.service")) {
-		t.Errorf("output = %q, want the written units", out)
+		t.Errorf("output = %q, want the written unit", out)
 	}
-	if !strings.Contains(out, "systemctl --user enable --now gamehost-corekeeper-backup.timer") {
-		t.Errorf("output = %q, want the timer next step", out)
+	if strings.Contains(out, "backup.timer") {
+		t.Errorf("output = %q, want no timer next step", out)
+	}
+	if !strings.Contains(out, "scheduled backups: every 24h0m0s, keeping 3 archives") {
+		t.Errorf("output = %q, want the schedule notice", out)
 	}
 
-	for _, name := range []string{
-		"gamehost-corekeeper.service",
-		"gamehost-corekeeper-backup.service",
-		"gamehost-corekeeper-backup.timer",
-	} {
-		if _, err := os.Stat(filepath.Join(unitDir, name)); err != nil {
-			t.Errorf("%s not written: %v", name, err)
-		}
+	entries, err := os.ReadDir(unitDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "gamehost-corekeeper.service" {
+		t.Errorf("units = %v, want only the main service", entries)
 	}
 
 	mainUnit := readTestFile(t, filepath.Join(unitDir, "gamehost-corekeeper.service"))
@@ -1227,14 +1234,6 @@ func TestServiceInstall(t *testing.T) {
 		if !strings.Contains(mainUnit, want) {
 			t.Errorf("main unit missing %q:\n%s", want, mainUnit)
 		}
-	}
-	backup := readTestFile(t, filepath.Join(unitDir, "gamehost-corekeeper-backup.service"))
-	if !strings.Contains(backup, "backup corekeeper -keep 3") {
-		t.Errorf("backup unit does not keep three archives:\n%s", backup)
-	}
-	timer := readTestFile(t, filepath.Join(unitDir, "gamehost-corekeeper-backup.timer"))
-	if !strings.Contains(timer, "OnUnitActiveSec=1d") {
-		t.Errorf("timer does not run daily:\n%s", timer)
 	}
 }
 

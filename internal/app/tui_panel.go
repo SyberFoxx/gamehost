@@ -31,9 +31,6 @@ func servePanel(ctx context.Context, addr, start string) (string, func(), error)
 
 	server := newPanelServer(s)
 	go func() { _ = server.Serve(listener) }()
-	// The lobby is the only long-lived process here, so it owns the schedule
-	// for as long as the panel runs.
-	go newBackupScheduler(s, io.Discard).Run(ctx)
 
 	stopped := make(chan struct{})
 	var once sync.Once

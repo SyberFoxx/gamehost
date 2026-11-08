@@ -39,7 +39,7 @@ func runStart(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return err
 	}
 
-	launch, logPath, err := prepareStart(s, inst)
+	driver, _, logPath, err := prepareStart(s, inst)
 	if err != nil {
 		return err
 	}
@@ -57,7 +57,7 @@ func runStart(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if _, err := logs.Prune(s.Layout(inst.Name).Logs, logRetention); err != nil {
 		return err
 	}
-	return serve(ctx, s, inst, launch, serverOutput(stdout, logFile), logPath, true)
+	return serve(ctx, s, inst, driver, serverOutput(stdout, logFile), logPath, true)
 }
 
 // serverOutput sends the server's output to the log first and treats stdout as
@@ -76,37 +76,41 @@ func (b bestEffort) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// prepareStart validates a launch and returns its command and log path.
+// prepareStart validates a launch and returns its driver, command and log path.
 // Two servers on one data directory corrupt the world, so it refuses early.
-func prepareStart(s *store.Store, inst instance.Instance) (game.Launch, string, error) {
+func prepareStart(s *store.Store, inst instance.Instance) (game.Registration, game.Launch, string, error) {
 	driver, err := games.Lookup(inst.Game)
 	if err != nil {
-		return game.Launch{}, "", err
+		return game.Registration{}, game.Launch{}, "", err
 	}
 	state, err := s.LoadState(inst.Name)
 	if err != nil {
-		return game.Launch{}, "", err
+		return game.Registration{}, game.Launch{}, "", err
 	}
 	if state.Running() && process.Alive(state.PID) {
-		return game.Launch{}, "", fmt.Errorf("start instance %q: %w (pid %d)", inst.Name, ErrRunning, state.PID)
+		return game.Registration{}, game.Launch{}, "", fmt.Errorf("start instance %q: %w (pid %d)", inst.Name, ErrRunning, state.PID)
 	}
 	if _, err := os.Stat(driver.Installer.ServerPath(inst.InstallDir)); err != nil {
-		return game.Launch{}, "", fmt.Errorf("start instance %q: server is not installed, run: gamehost install %s: %w", inst.Name, inst.Name, err)
-	}
-
-	// A driver that keeps its settings in files of its own writes them here,
-	// before the launch, so the server never reads a stale cluster.
-	if err := prepareRuntime(driver, inst); err != nil {
-		return game.Launch{}, "", err
+		return game.Registration{}, game.Launch{}, "", fmt.Errorf("start instance %q: server is not installed, run: gamehost install %s: %w", inst.Name, inst.Name, err)
 	}
 
 	// Validate the launch contract before a process exists.
-	launch, err := driver.Runner.Launch(inst)
+	launch, err := prepareLaunch(driver, inst)
 	if err != nil {
-		return game.Launch{}, "", err
+		return game.Registration{}, game.Launch{}, "", err
 	}
 	logPath := filepath.Join(s.Layout(inst.Name).Logs, time.Now().Format("2006-01-02_15-04-05")+".log")
-	return launch, logPath, nil
+	return driver, launch, logPath, nil
+}
+
+// prepareLaunch lets a driver write the files its server reads at startup and
+// builds the command. It runs before every launch, including a restart after a
+// backup window, because a game update can restore those files.
+func prepareLaunch(driver game.Registration, inst instance.Instance) (game.Launch, error) {
+	if err := prepareRuntime(driver, inst); err != nil {
+		return game.Launch{}, err
+	}
+	return driver.Runner.Launch(inst)
 }
 
 // prepareRuntime lets a driver write the files its server reads at startup.
@@ -178,9 +182,13 @@ func startDetached(s *store.Store, inst instance.Instance, logPath string, stdou
 		inst.Name, supervisorPID, startupWait, logPath)
 }
 
-// serve starts the server and reports its lifecycle until it exits.
-// It runs in the foreground or inside the detached supervisor.
-func serve(ctx context.Context, s *store.Store, inst instance.Instance, launch game.Launch, out io.Writer, logPath string, foreground bool) error {
+// serve runs the server until it exits and restarts it around a scheduled
+// backup window. It runs in the foreground or inside the detached supervisor.
+//
+// The supervisor owns the schedule: it is the only process alive exactly while
+// the server runs, it already holds run.lock for the whole lifetime, and its
+// output is the run log the user follows.
+func serve(ctx context.Context, s *store.Store, inst instance.Instance, driver game.Registration, out io.Writer, logPath string, foreground bool) error {
 	// The lock closes the window between the stopped check and the launch, so
 	// two servers can never share one data directory.
 	lock, err := s.Lock(inst.Name)
@@ -192,6 +200,52 @@ func serve(ctx context.Context, s *store.Store, inst instance.Instance, launch g
 	}
 	defer func() { _ = lock.Release() }()
 
+	for {
+		launch, err := prepareLaunch(driver, inst)
+		if err != nil {
+			return err
+		}
+
+		res, window, err := runOnce(ctx, s, inst, launch, out, logPath, foreground)
+		if err != nil {
+			return err
+		}
+		if !window {
+			if !res.Stopped && res.ExitCode != 0 {
+				return fmt.Errorf("server exited with code %d, see %s", res.ExitCode, logPath)
+			}
+			return nil
+		}
+
+		fmt.Fprintf(out, "scheduled backup of %s: stopping the server for a clean archive\n", inst.Name)
+
+		// The schedule may have been edited while the server ran.
+		fresh, err := s.Load(inst.Name)
+		if err != nil {
+			return err
+		}
+		inst = fresh
+		if err := archiveWindow(s, inst, out); err != nil {
+			fmt.Fprintf(out, "scheduled backup of %s: %v\n", inst.Name, err)
+		}
+
+		// A stop requested while the window ran wins: the server stays down.
+		// Our own stop left the phase in PhaseStopping; stopInstance writes
+		// PhaseStopped when it finds the process gone.
+		state, err := s.LoadState(inst.Name)
+		if err != nil {
+			return err
+		}
+		if state.Phase != instance.PhaseStopping {
+			return nil
+		}
+		fmt.Fprintf(out, "scheduled backup of %s: starting the server again\n", inst.Name)
+	}
+}
+
+// runOnce launches the server and waits for it to exit or for the schedule to
+// ask for a window. It returns window=true when it stopped the server itself.
+func runOnce(ctx context.Context, s *store.Store, inst instance.Instance, launch game.Launch, out io.Writer, logPath string, foreground bool) (process.Result, bool, error) {
 	startSpec := process.Spec{
 		Path: launch.Path,
 		Args: launch.Args,
@@ -200,7 +254,7 @@ func serve(ctx context.Context, s *store.Store, inst instance.Instance, launch g
 	}
 	server, err := process.Start(startSpec)
 	if err != nil {
-		return fmt.Errorf("start instance %q: %w", inst.Name, err)
+		return process.Result{}, false, fmt.Errorf("start instance %q: %w", inst.Name, err)
 	}
 
 	// Extra shards join the primary process group, so the pid in state.json and
@@ -215,7 +269,7 @@ func serve(ctx context.Context, s *store.Store, inst instance.Instance, launch g
 		}, server.PID())
 		if err != nil {
 			_ = process.Stop(server.PID(), stopGrace)
-			return fmt.Errorf("start instance %q: %w", inst.Name, err)
+			return process.Result{}, false, fmt.Errorf("start instance %q: %w", inst.Name, err)
 		}
 		servers = append(servers, shard)
 	}
@@ -226,7 +280,7 @@ func serve(ctx context.Context, s *store.Store, inst instance.Instance, launch g
 		PID:       server.PID(),
 		StartedAt: startedAt,
 	}); err != nil {
-		return err
+		return process.Result{}, false, err
 	}
 
 	if foreground {
@@ -244,12 +298,39 @@ func serve(ctx context.Context, s *store.Store, inst instance.Instance, launch g
 	for _, shard := range servers {
 		go func(shard *process.Server) { results <- shard.WaitContext(ctx, stopGrace) }(shard)
 	}
-	res := <-results
+
+	// The schedule lives with the running server, the only moment new data
+	// exists. It stops after the first due window.
+	due := make(chan struct{}, 1)
+	done := make(chan struct{})
+	defer close(done)
+	go watchSchedule(ctx, s, inst.Name, startedAt, due, done)
+
+	var res process.Result
+	window := false
+	select {
+	case res = <-results:
+	case <-due:
+		window = true
+		// Record the intent so status and a concurrent command see a server on
+		// its way down, and a user stop can tell itself apart from our window.
+		if state, err := s.LoadState(inst.Name); err == nil {
+			state.Phase = instance.PhaseStopping
+			_ = s.SaveState(inst.Name, state)
+		}
+		_ = process.Stop(server.PID(), stopGrace)
+		res = <-results
+	}
+
 	for range servers[1:] {
 		if anyAlive(servers) {
 			_ = process.Stop(server.PID(), stopGrace)
 		}
 		res = mergeShardResults(res, <-results)
+	}
+
+	if window {
+		return res, true, nil
 	}
 
 	// A stop requested from another terminal is a clean stop even when the
@@ -274,14 +355,11 @@ func serve(ctx context.Context, s *store.Store, inst instance.Instance, launch g
 		ExitCode:  res.ExitCode,
 		GameID:    sessionID,
 	}); err != nil {
-		return err
+		return res, false, err
 	}
 
 	fmt.Fprintf(out, "\n%s is %s after %s (exit %d)\n", inst.Name, phase, res.Duration.Round(time.Second), res.ExitCode)
-	if phase == instance.PhaseCrashed {
-		return fmt.Errorf("server exited with code %d, see %s", res.ExitCode, logPath)
-	}
-	return nil
+	return res, false, nil
 }
 
 // anyAlive reports whether any shard of an instance still runs.
@@ -332,14 +410,7 @@ func runSupervise(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	}
 	// The parent prepared the cluster before re-execing, but the hidden command
 	// must also stand on its own when it is the entry point.
-	if err := prepareRuntime(driver, inst); err != nil {
-		return err
-	}
-	launch, err := driver.Runner.Launch(inst)
-	if err != nil {
-		return err
-	}
-	return serve(ctx, s, inst, launch, stdout, *logPath, false)
+	return serve(ctx, s, inst, driver, stdout, *logPath, false)
 }
 
 // runStop asks a running server to exit and waits for it.

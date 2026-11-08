@@ -34,163 +34,113 @@ func newScheduledInstance(t *testing.T, s *store.Store, every string) instance.I
 	return inst
 }
 
-// covers a due backup of a stopped instance and the interval in between
-func TestScheduledBackup(t *testing.T) {
+// writeArchive writes an archive with a fixed modification time.
+func writeArchive(t *testing.T, dir string, at time.Time) {
+	t.Helper()
+
+	path := filepath.Join(dir, at.Format("2006-01-02_15-04-05")+".tar.gz")
+	if err := os.WriteFile(path, []byte("archive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, at, at); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// covers when a scheduled backup is due
+func TestBackupDue(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name    string
+		every   string
+		started time.Time
+		archive time.Time
+		want    bool
+	}{
+		{"off", "", now.Add(-48 * time.Hour), time.Time{}, false},
+		{"no archive yet, half the interval", "1h", now.Add(-30 * time.Minute), time.Time{}, false},
+		{"no archive yet, past the interval", "1h", now.Add(-2 * time.Hour), time.Time{}, true},
+		{"recent archive wins over the start", "1h", now.Add(-9 * time.Hour), now.Add(-30 * time.Minute), false},
+		{"old archive is due", "1h", now.Add(-9 * time.Hour), now.Add(-90 * time.Minute), true},
+		{"archive older than the start does not count", "1h", now.Add(-30 * time.Minute), now.Add(-5 * time.Hour), false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := store.New(t.TempDir())
+			inst := newScheduledInstance(t, s, test.every)
+			if !test.archive.IsZero() {
+				writeArchive(t, s.Layout(inst.Name).Backups, test.archive)
+			}
+
+			if got := backupDue(s, inst, test.started, now); got != test.want {
+				t.Errorf("backupDue() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+// covers the archive of a maintenance window and its retention
+func TestArchiveWindow(t *testing.T) {
 	t.Parallel()
 
 	s := store.New(t.TempDir())
 	inst := newScheduledInstance(t, s, "1h")
+	inst.Backup.Keep = 1
+	if err := s.Save(inst); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(inst.DataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(inst.DataDir, "ServerConfig.json"), []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
+	// Two old archives fill the retention of one.
+	writeArchive(t, s.Layout(inst.Name).Backups, time.Now().Add(-3*time.Hour))
+	writeArchive(t, s.Layout(inst.Name).Backups, time.Now().Add(-2*time.Hour))
+
 	var out bytes.Buffer
-	now := time.Now()
-	sched := &backupScheduler{
-		store:   s,
-		out:     &out,
-		started: now.Add(-2 * time.Hour),
-		now:     func() time.Time { return now },
-		stop:    func(instance.Instance) error { return nil },
-		start:   func(instance.Instance) error { return nil },
+	if err := archiveWindow(s, inst, &out); err != nil {
+		t.Fatalf("archiveWindow() error = %v", err)
 	}
 
-	if err := sched.maybeBackup(inst); err != nil {
-		t.Fatalf("maybeBackup() error = %v", err)
-	}
 	archives, err := backup.List(s.Layout(inst.Name).Backups)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(archives) != 1 {
-		t.Fatalf("archives = %v, want one scheduled backup", archives)
+		t.Fatalf("archives = %v, want the new one and the retention applied", archives)
 	}
-	if !strings.Contains(out.String(), "scheduled backup of corekeeper") {
-		t.Errorf("output = %q, want the backup notice", out.String())
+	if !strings.Contains(out.String(), "scheduled backup of corekeeper:") {
+		t.Errorf("output = %q, want the archive notice", out.String())
 	}
-
-	// The archive just written is the new reference: the next tick is not due.
-	if err := sched.maybeBackup(inst); err != nil {
-		t.Fatalf("second maybeBackup() error = %v", err)
-	}
-	if archives, err = backup.List(s.Layout(inst.Name).Backups); err != nil || len(archives) != 1 {
-		t.Errorf("archives = %v, %v; want the same single archive", archives, err)
+	if !strings.Contains(out.String(), "removed old backup") {
+		t.Errorf("output = %q, want the prune notice", out.String())
 	}
 }
 
-// covers a disabled schedule doing nothing
-func TestScheduledBackupDisabled(t *testing.T) {
+// covers a window on an instance that never wrote data
+func TestArchiveWindowWithoutData(t *testing.T) {
 	t.Parallel()
 
 	s := store.New(t.TempDir())
-	inst := newScheduledInstance(t, s, "")
+	inst := newScheduledInstance(t, s, "1h")
 
-	sched := &backupScheduler{
-		store:   s,
-		out:     &bytes.Buffer{},
-		started: time.Now().Add(-48 * time.Hour),
-		now:     time.Now,
-		stop:    func(instance.Instance) error { return nil },
-		start:   func(instance.Instance) error { return nil },
+	var out bytes.Buffer
+	if err := archiveWindow(s, inst, &out); err != nil {
+		t.Fatalf("archiveWindow() error = %v", err)
 	}
-	if err := sched.maybeBackup(inst); err != nil {
-		t.Fatalf("maybeBackup() error = %v", err)
+	if !strings.Contains(out.String(), "skipped: no data yet") {
+		t.Errorf("output = %q, want the skip notice", out.String())
 	}
 	if archives, err := backup.List(s.Layout(inst.Name).Backups); err != nil || len(archives) != 0 {
 		t.Errorf("archives = %v, %v; want none", archives, err)
-	}
-}
-
-// covers stopping a server for its backup and starting it again
-func TestScheduledBackupRestartsServer(t *testing.T) {
-	t.Parallel()
-
-	s := store.New(t.TempDir())
-	inst := newScheduledInstance(t, s, "1h")
-	if err := s.SaveState(inst.Name, instance.State{
-		Phase:     instance.PhaseRunning,
-		PID:       os.Getpid(),
-		StartedAt: time.Now(),
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	var out bytes.Buffer
-	now := time.Now()
-	stopped, started := 0, 0
-	sched := &backupScheduler{
-		store:   s,
-		out:     &out,
-		started: now.Add(-2 * time.Hour),
-		now:     func() time.Time { return now },
-		stop: func(i instance.Instance) error {
-			stopped++
-			// The supervisor records the terminal phase after a graceful stop.
-			return s.SaveState(i.Name, instance.State{Phase: instance.PhaseStopped})
-		},
-		start: func(instance.Instance) error {
-			started++
-			return nil
-		},
-	}
-
-	if err := sched.maybeBackup(inst); err != nil {
-		t.Fatalf("maybeBackup() error = %v", err)
-	}
-	if stopped != 1 {
-		t.Errorf("stop calls = %d, want the server stopped for the archive", stopped)
-	}
-	if started != 1 {
-		t.Errorf("start calls = %d, want the server started again", started)
-	}
-	if !strings.Contains(out.String(), "stopping the server for a clean archive") {
-		t.Errorf("output = %q, want the maintenance notice", out.String())
-	}
-}
-
-// covers a restart even when the archive could not be written
-func TestScheduledBackupRestartsAfterFailure(t *testing.T) {
-	t.Parallel()
-
-	s := store.New(t.TempDir())
-	inst := newScheduledInstance(t, s, "1h")
-	if err := s.SaveState(inst.Name, instance.State{
-		Phase: instance.PhaseRunning,
-		PID:   os.Getpid(),
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(filepath.Join(inst.DataDir, "ServerConfig.json"), []byte("{}"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// A read-only backup directory makes the archive fail after the stop.
-	backups := s.Layout(inst.Name).Backups
-	if err := os.Chmod(backups, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(backups, 0o755) })
-
-	started := 0
-	now := time.Now()
-	sched := &backupScheduler{
-		store:   s,
-		out:     &bytes.Buffer{},
-		started: now.Add(-2 * time.Hour),
-		now:     func() time.Time { return now },
-		stop: func(i instance.Instance) error {
-			return s.SaveState(i.Name, instance.State{Phase: instance.PhaseStopped})
-		},
-		start: func(instance.Instance) error {
-			started++
-			return nil
-		},
-	}
-
-	if err := sched.maybeBackup(inst); err == nil {
-		t.Error("maybeBackup() error = nil, want the failed archive")
-	}
-	if started != 1 {
-		t.Errorf("start calls = %d, want the server restarted anyway", started)
 	}
 }
