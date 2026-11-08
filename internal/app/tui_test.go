@@ -329,3 +329,54 @@ func TestLobbyItemsWithoutInstances(t *testing.T) {
 		t.Fatalf("got %d items, want none", len(items))
 	}
 }
+
+// covers the heap surviving the round trip between the form and the store
+func TestProjectZomboidMemorySettings(t *testing.T) {
+	t.Parallel()
+
+	inst, err := instance.New("zomboid", instance.Options{
+		Game:          instance.GameProjectZomboid,
+		AdminPassword: "secret",
+		Memory:        "4g",
+		InstallDir:    "/srv/files",
+		DataDir:       "/srv/data",
+	})
+	if err != nil {
+		t.Fatalf("instance.New: %v", err)
+	}
+	if got := settingsOf(inst).Memory; got != "4g" {
+		t.Fatalf("settingsOf lost the memory: %q", got)
+	}
+
+	opts, err := updateOptions(inst, settingsOf(inst))
+	if err != nil {
+		t.Fatalf("updateOptions: %v", err)
+	}
+	if opts.Memory != "4g" {
+		t.Fatalf("updateOptions memory = %q, want 4g", opts.Memory)
+	}
+
+	// An empty field restores the default.
+	settings := settingsOf(inst)
+	settings.Memory = ""
+	opts, err = updateOptions(inst, settings)
+	if err != nil {
+		t.Fatalf("updateOptions: %v", err)
+	}
+	updated, err := instance.New(inst.Name, opts)
+	if err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	if updated.Memory != "" {
+		t.Fatalf("Memory = %q, want the default", updated.Memory)
+	}
+
+	// A bad value reaches the model error, not the store.
+	settings.Memory = "256m"
+	opts, err = updateOptions(inst, settings)
+	if err == nil {
+		if _, err := instance.New(inst.Name, opts); err == nil {
+			t.Fatalf("a 256m heap was accepted")
+		}
+	}
+}

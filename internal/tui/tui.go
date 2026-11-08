@@ -64,6 +64,7 @@ type Settings struct {
 	UDPPort       string
 	Password      string
 	AdminPassword string
+	Memory        string
 	GameID        string
 	Network       string
 	ClusterToken  string

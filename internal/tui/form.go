@@ -443,6 +443,7 @@ func settingsFrom(values map[string]string) Settings {
 		UDPPort:       values["udp"],
 		Password:      values["password"],
 		AdminPassword: values["admin-password"],
+		Memory:        values["memory"],
 		GameID:        values["game-id"],
 		Network:       values["network"],
 		ClusterToken:  values["cluster-token"],
@@ -494,6 +495,7 @@ func newCreateForm(ctx context.Context, backend Backend) screen {
 		textField("udp", "Direct port", "Project Zomboid direct-connect port", ""),
 		textField("password", "Join password", "empty means anyone with the address can join", ""),
 		textField("admin-password", "Admin password", "required on the first start", ""),
+		textField("memory", "Memory", "JVM heap such as 4g; empty uses 8g", ""),
 		textField("game-id", "Game ID", "empty generates one on the next start", ""),
 		textField("backup-every", "Backup every", "for example 24h; empty is off", ""),
 		textField("backup-keep", "Backup keep", "archives to keep", "5"),
@@ -510,6 +512,7 @@ func newCreateForm(ctx context.Context, backend Backend) screen {
 		"caves":          whenGame(gameDontStarveTogether),
 		"udp":            whenGame(gameProjectZomboid),
 		"admin-password": whenGame(gameProjectZomboid),
+		"memory":         whenGame(gameProjectZomboid),
 	})
 
 	return &form{
@@ -543,6 +546,7 @@ func newSettingsForm(ctx context.Context, backend Backend, settings Settings) sc
 		textField("udp", "Direct port", "Project Zomboid direct-connect port", settings.UDPPort),
 		textField("password", "Join password", "empty means anyone with the address can join", settings.Password),
 		textField("admin-password", "Admin password", "required on the first start", settings.AdminPassword),
+		textField("memory", "Memory", "JVM heap such as 4g; empty uses 8g", settings.Memory),
 		textField("game-id", "Game ID", "empty generates one on the next start", settings.GameID),
 		textField("backup-every", "Backup every", "for example 24h; empty is off", settings.BackupEvery),
 		textField("backup-keep", "Backup keep", "archives to keep", settings.BackupKeep),
@@ -559,6 +563,7 @@ func newSettingsForm(ctx context.Context, backend Backend, settings Settings) sc
 		"caves":          whenGame(gameDontStarveTogether),
 		"udp":            whenGame(gameProjectZomboid),
 		"admin-password": whenGame(gameProjectZomboid),
+		"memory":         whenGame(gameProjectZomboid),
 	})
 
 	return &form{

@@ -916,3 +916,41 @@ func TestModsKeepsTheScreenWhileBusy(t *testing.T) {
 		t.Fatalf("esc did not ask to pop the screen")
 	}
 }
+
+// covers the heap field: project zomboid only, on both forms
+func TestMemoryFieldBelongsToProjectZomboid(t *testing.T) {
+	t.Parallel()
+	f := &fake{games: []GameChoice{
+		{Name: gameCoreKeeper, Label: "Core Keeper"},
+		{Name: gameProjectZomboid, Label: "Project Zomboid"},
+	}}
+
+	create := newCreateForm(context.Background(), f.backend()).(*form)
+	memory := create.fields[indexOf(t, create.fields, "memory")]
+	if memory.visible(create.values()) {
+		t.Fatalf("Core Keeper shows the memory field")
+	}
+
+	game := indexOf(t, create.fields, "game")
+	create.fields[game].current = 1
+	if !memory.visible(create.values()) {
+		t.Fatalf("Project Zomboid hides the memory field")
+	}
+
+	// The settings form shows the stored value and keeps it on submit.
+	editor := newSettingsForm(context.Background(), f.backend(), Settings{
+		Game:   gameProjectZomboid,
+		Name:   "zomboid",
+		Memory: "4g",
+	}).(*form)
+	memory = editor.fields[indexOf(t, editor.fields, "memory")]
+	if !memory.visible(editor.values()) {
+		t.Fatalf("the settings form hides the memory field")
+	}
+	if got := memory.value(); got != "4g" {
+		t.Fatalf("memory field = %q, want the stored value", got)
+	}
+	if got := settingsFrom(editor.values()).Memory; got != "4g" {
+		t.Fatalf("settingsFrom lost the memory: %q", got)
+	}
+}
