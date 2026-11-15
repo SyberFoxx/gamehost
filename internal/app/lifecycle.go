@@ -113,6 +113,43 @@ func prepareLaunch(driver game.Registration, inst instance.Instance) (game.Launc
 	return driver.Runner.Launch(inst)
 }
 
+// openConsole takes the control file a console-driven driver reads as its
+// standard input. It returns nil values for a game that has no console.
+func openConsole(driver game.Registration, inst instance.Instance) (*process.Control, game.Console, error) {
+	console, ok := driver.Runner.(game.Console)
+	if !ok {
+		return nil, nil, nil
+	}
+	control, err := process.OpenControl(console.ConsolePath(inst))
+	if err != nil {
+		return nil, nil, err
+	}
+	return control, console, nil
+}
+
+// consoleOf returns the console of an instance's driver, when it has one.
+func consoleOf(inst instance.Instance) (game.Console, bool) {
+	driver, err := games.Lookup(inst.Game)
+	if err != nil {
+		return nil, false
+	}
+	console, ok := driver.Runner.(game.Console)
+	return console, ok
+}
+
+// waitGroupGone waits for every process of an instance to leave or the window
+// to close, so the next command never races the supervisor.
+func waitGroupGone(pid int, window time.Duration) bool {
+	deadline := time.Now().Add(window)
+	for time.Now().Before(deadline) {
+		if !process.GroupAlive(pid) {
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return !process.GroupAlive(pid)
+}
+
 // prepareRuntime lets a driver write the files its server reads at startup.
 func prepareRuntime(driver game.Registration, inst instance.Instance) error {
 	preparer, ok := driver.Runner.(game.Preparer)
@@ -206,7 +243,7 @@ func serve(ctx context.Context, s *store.Store, inst instance.Instance, driver g
 			return err
 		}
 
-		res, window, err := runOnce(ctx, s, inst, launch, out, logPath, foreground)
+		res, window, err := runOnce(ctx, s, inst, driver, launch, out, logPath, foreground)
 		if err != nil {
 			return err
 		}
@@ -245,13 +282,26 @@ func serve(ctx context.Context, s *store.Store, inst instance.Instance, driver g
 
 // runOnce launches the server and waits for it to exit or for the schedule to
 // ask for a window. It returns window=true when it stopped the server itself.
-func runOnce(ctx context.Context, s *store.Store, inst instance.Instance, launch game.Launch, out io.Writer, logPath string, foreground bool) (process.Result, bool, error) {
+func runOnce(ctx context.Context, s *store.Store, inst instance.Instance, driver game.Registration, launch game.Launch, out io.Writer, logPath string, foreground bool) (process.Result, bool, error) {
 	startSpec := process.Spec{
 		Path: launch.Path,
 		Args: launch.Args,
 		Dir:  launch.Dir,
 		Out:  out,
 	}
+
+	// A driver with a console gets a control file as its standard input, so the
+	// shutdown is the one the game documents instead of a signal.
+	control, console, err := openConsole(driver, inst)
+	if err != nil {
+		return process.Result{}, false, fmt.Errorf("start instance %q: %w", inst.Name, err)
+	}
+	if control != nil {
+		defer func() { _ = control.Close() }() // the server owns it until this launch ends
+		startSpec.In = control.File()
+		startSpec.Stop = func() error { return control.Send(console.StopCommands(inst)...) }
+	}
+
 	server, err := process.Start(startSpec)
 	if err != nil {
 		return process.Result{}, false, fmt.Errorf("start instance %q: %w", inst.Name, err)
@@ -318,7 +368,8 @@ func runOnce(ctx context.Context, s *store.Store, inst instance.Instance, launch
 			state.Phase = instance.PhaseStopping
 			_ = s.SaveState(inst.Name, state)
 		}
-		_ = process.Stop(server.PID(), stopGrace)
+		// The window uses the same clean stop a user asks for, then signals.
+		server.Stop(stopGrace)
 		res = <-results
 	}
 
@@ -461,17 +512,20 @@ func stopInstance(s *store.Store, inst instance.Instance, stdout io.Writer) erro
 		return err
 	}
 
-	fmt.Fprintf(stdout, "stopping %s (pid %d), waiting up to %s\n", inst.Name, state.PID, stopGrace)
-	if err := process.Stop(state.PID, stopGrace); err != nil {
-		return fmt.Errorf("stop instance %q: %w", inst.Name, err)
+	if console, ok := consoleOf(inst); ok {
+		if err := process.SendControl(console.ConsolePath(inst), console.StopCommands(inst)...); err == nil {
+			// The console path is the one the game documents, so it runs first
+			// and keeps the signal escalation for a server that ignores it.
+			fmt.Fprintf(stdout, "asked %s to save and quit through its console, waiting up to %s\n", inst.Name, stopGrace)
+			waitGroupGone(state.PID, stopGrace)
+		}
 	}
-
-	// The Master is gone, but a second shard may still be exiting. Waiting for
-	// the group keeps the lock free by the time stop returns, so the next
-	// command never races the supervisor.
-	deadline := time.Now().Add(stopGrace)
-	for process.GroupAlive(state.PID) && time.Now().Before(deadline) {
-		time.Sleep(50 * time.Millisecond)
+	if process.GroupAlive(state.PID) {
+		fmt.Fprintf(stdout, "stopping %s (pid %d), waiting up to %s\n", inst.Name, state.PID, stopGrace)
+		if err := process.Stop(state.PID, stopGrace); err != nil {
+			return fmt.Errorf("stop instance %q: %w", inst.Name, err)
+		}
+		waitGroupGone(state.PID, stopGrace)
 	}
 
 	// The supervisor records the same phase; writing here keeps `stop` honest

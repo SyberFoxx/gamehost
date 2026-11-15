@@ -177,6 +177,13 @@ Candidates, easiest first:
   the launcher runs, and `game.Validator` lets `config` refuse it before stopping a running server.
 - The `start-server.sh` script ships from SteamCMD; if it loses the execute bit, `start` fails with
   `permission denied` until it is `chmod +x`.
+- Project Zomboid is stopped through its console, not a signal: the launch reads
+  `<datadir>/gamehost.control`, a fifo the supervisor holds read-write so the open never blocks and
+  the server never reads EOF between commands. `stop`, Ctrl+C and the backup window send `save`
+  then `quit` and escalate to `SIGTERM`/`SIGKILL` only after `consoleGrace` (30 s). `game.Console`
+  is optional: a game without it keeps the signal stop, so never move the escalation into the
+  driver. Do not delete the fifo and do not replace it with a plain pipe — `stop` runs in another
+  process and reaches the server only through that file.
 - Don't Starve Together is Steam app `343050`; `bin64/dontstarve_dedicated_server_nullrenderer_x64`
   must run with `bin64` as working directory. `-persistent_storage_root <data>`, `-conf_dir gamehost`
   and `-cluster <instance>` put the cluster at `data/gamehost/<instance>/`.

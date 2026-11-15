@@ -132,10 +132,20 @@ Primary source: [PZwiki, Dedicated server](https://pzwiki.net/wiki/Dedicated_ser
 | Join | No game ID: players add the address and port in the Favorites tab |
 | Player limit and join password | only in `Server/<name>.ini`, no launch flag |
 | Mods | `WorkshopItems=<id>;<id>` and `Mods=<id>;<id>` at the top of `Server/<name>.ini` |
+| Console | commands arrive on the server's stdin; gamehost creates `<cachedir>/gamehost.control` as a fifo and the launch reads it, which is the documented `echo save > ...` / `echo quit > ...` path |
+| Stop | `save`, then `quit` on the console; `SIGTERM` and `SIGKILL` only for a server that ignores it |
 
 The driver passes only what a flag can express: server name, both ports, cache directory and the
 admin password. Max players and the join password stay in the ini, which the server also rewrites,
 so gamehost does not fight it.
+
+The console is how a Project Zomboid server is asked to stop. gamehost creates
+`<cachedir>/gamehost.control` as a fifo and hands its read end to the launch as standard input; the
+supervisor keeps a read-write handle open, so opening the fifo never blocks, the server never reads
+EOF between two commands, and a writer never waits for a reader to appear. `stop`, Ctrl+C and the
+scheduled backup window write `save` and `quit`, and only fall back to the signal path when the
+server has not left after 30 seconds. A game without a console never opens one and keeps the signal
+stop unchanged.
 
 The one deliberate exception to "the ini belongs to the server" is the mod list. `mods add` and
 `mods remove` rewrite only the `WorkshopItems=` and `Mods=` lines, leave every other byte in place
@@ -378,7 +388,8 @@ Why this shape:
 - **The supervisor stays alive while the server runs.** It is the only writer of `state.json` during
   the run, which keeps phases consistent and lets `status` detect crashes.
 - **`stop` signals the server's process group**, not the supervisor. The supervisor observes the exit
-  and records it, so a stop looks exactly like a clean shutdown.
+  and records it, so a stop looks exactly like a clean shutdown. A game with a console is asked to
+  `save` and `quit` first, and only a server that ignores it is signalled.
 - **A signal from outside counts as a clean stop.** If the server dies from `SIGTERM` or `SIGINT`,
   `process.Result.Stopped` is true; otherwise an external `stop` would be reported as a crash.
 - **A closed terminal is a stop, not an orphan.** The foreground run handles `SIGHUP` as well, so
@@ -529,6 +540,7 @@ Why this shape:
 | M16 | Project Zomboid mods | `mods add`, `remove` and `list` edit only the two mod lines of the server ini, the lobby has a Mods screen, and every other ini line survives byte for byte | text file editing with in-place line replacement, driver-owned mod store, validation before writing |
 | M17 | configurable server memory | `--memory 4g` and the lobby field change the Project Zomboid heap, the value survives `update` and a restart, every other vmArg is preserved, and an impossible heap is refused before the launcher runs | driver-owned json rewrite behind `game.Preparer`, JVM size parsing shared with the model, `/proc/meminfo` as the sanity bound |
 | M18 | supervisor-owned schedule and live settings | the scheduled window runs for a TUI, detached or systemd server, archives, prunes per class and restarts, every step in the run log; the TUI Backups screen shows the schedule and the newest archive and `e` edits it live; a Project Zomboid heap is always stored, changing it restarts a running server, and `--autosave` sets `SaveWorldEveryMinutes` | a loop behind the existing supervisor, reload-on-tick for live settings, driver-owned ini line rewrite, retention split by archive class |
+| M19 | Project Zomboid console channel | a launch reads `<cachedir>/gamehost.control`, `stop`, Ctrl+C and the backup window save and quit through it, a hung server still ends by signal, and a game without a console keeps the signal stop | a fifo held read-write, an optional driver interface the lifecycle asserts, escalation only after a bounded window |
 
 Each milestone is one work unit: code, tests and doc updates in the same commit.
 
@@ -628,6 +640,15 @@ Each milestone is one work unit: code, tests and doc updates in the same commit.
 - **Game-specific settings stay in the game's own files when the game owns them.** Project Zomboid
   rewrites its ini, so max players and the join password stay there; gamehost only manages what the
   startup flags can express.
+- **A game that can be asked to stop is asked, not signalled.** Project Zomboid reads console
+  commands from its standard input, and its documentation stops the server with `save` and `quit`
+  while the devs explicitly discourage the systemd unit that signals instead. The launch therefore
+  reads a fifo gamehost creates under the instance's cache directory, held read-write by the
+  supervisor: opening it never blocks, the server never reads EOF between two commands, and `stop`
+  in another process never waits for a reader to appear. The signals stay as the escalation, so a
+  console that refuses a command, a server that ignores it for 30 seconds, or a build without a
+  console ends exactly the way it did before. The wiki's alternative — a systemd socket unit in
+  `/etc` — would move the same fifo outside the instance and make `gamehost stop` depend on systemd.
 - **One instance can be more than one process.** Don't Starve Together splits the world into a
   Master and an optional Caves shard, and the game requires two processes. The second one joins the
   process group of the first, so the pid already stored, the existing stop signal and the systemd

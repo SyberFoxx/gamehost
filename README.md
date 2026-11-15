@@ -44,6 +44,9 @@ concurrency and tests with `-race`.
 | M14 | Don't Starve Together driver: online and offline clusters, cluster files, token | done |
 | M15 | Caves shard for DST, Klei admins from the terminal and the lobby | done |
 | M16 | Project Zomboid mods: workshop items and mod ids from the CLI and the lobby | done |
+| M17 | Project Zomboid memory: `--memory` and the lobby field rewrite only the JVM heap | done |
+| M18 | supervisor-owned backup schedule and live settings from the lobby | done |
+| M19 | Project Zomboid console: a controlled `save`/`quit` stop instead of a signal | done |
 
 ## Features
 
@@ -51,8 +54,8 @@ concurrency and tests with `-race`.
 - Keeps configuration and world data outside the repository, under a single `GAMEHOST_HOME` root.
 - Validates the launch contract before touching a process: world mode names, game ID charset,
   player limits, network mode.
-- Runs the server in the foreground or detached, with a clean `SIGTERM` → grace period → `SIGKILL`
-  shutdown.
+- Runs the server in the foreground or detached, and stops it the way the game documents: a `save`
+  and `quit` on the console for Project Zomboid, `SIGTERM` → grace period → `SIGKILL` for the rest.
 - Refuses a second server on the same world, and stops a detached one from any terminal.
 - Persists the runtime phase so another terminal can see what is happening.
 - Tees server output to both the terminal and a per-run log file.
@@ -308,8 +311,9 @@ Zomboid, max players and the join password stay in its ini.
 
 `start` without flags keeps the server in the foreground with its output on the terminal; Ctrl+C
 stops it. `start --detach` hands the server to a supervisor in its own session and returns, so the
-server survives closing the terminal. `stop` signals the whole process group, waits up to 20
-seconds for a clean save, then escalates to `SIGKILL`.
+server survives closing the terminal. `stop` asks a game with a console to `save` and `quit` and
+waits up to 30 seconds for it; anything else, or a console that does not answer in that window, gets
+`SIGTERM` and then `SIGKILL` after the 60-second grace period.
 
 Without `--port` the server uses the Steam relay network, so no router configuration is needed.
 Passing `--port 27015` switches it to direct connections, which requires opening UDP ports.

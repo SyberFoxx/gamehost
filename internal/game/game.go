@@ -72,6 +72,17 @@ type ModStore interface {
 	SaveMods(inst instance.Instance, mods Mods) error
 }
 
+// Console is a server that reads commands from its standard input, which
+// gamehost feeds from a control file. Project Zomboid takes its admin commands
+// that way and asks to be stopped with `save` and `quit` instead of a signal.
+// A game without a console keeps the process-signal stop.
+type Console interface {
+	// ConsolePath returns the control file this instance's launch reads.
+	ConsolePath(inst instance.Instance) string
+	// StopCommands returns the lines that end the server cleanly, in order.
+	StopCommands(inst instance.Instance) []string
+}
+
 // Registration pairs a game with its driver.
 type Registration struct {
 	Game      string
