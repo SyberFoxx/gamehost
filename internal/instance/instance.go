@@ -41,6 +41,13 @@ const (
 	minProjectZomboidMemory = 512 << 20
 	// maxAutosaveMinutes is the largest interval the server ini accepts.
 	maxAutosaveMinutes = 65535
+	// ProjectZomboidMaxPlayers is the player limit the server ini documents:
+	// min 1, max 100, default 32, and counts above 32 desync the map.
+	ProjectZomboidMaxPlayers = 100
+	// maxProjectZomboidPasswordLen bounds the join password gamehost writes
+	// into the ini. The game documents no limit; this keeps a pasted blob from
+	// becoming a config file.
+	maxProjectZomboidPasswordLen = 64
 
 	// DontStarveTogetherMaxPlayers is the largest lobby the server accepts.
 	DontStarveTogetherMaxPlayers = 64
@@ -248,6 +255,8 @@ func New(name string, opts Options) (Instance, error) {
 		if network.UDPPort == 0 && network.Port < 65535 {
 			network.UDPPort = network.Port + 1
 		}
+		// The join password is an ini value the driver writes before a launch.
+		network.Password = opts.Password
 	case GameDontStarveTogether:
 		// A DST cluster is either listed by Klei or LAN only; both listen on UDP.
 		network.Mode = NetworkOnline
@@ -411,9 +420,10 @@ func (i Instance) validateProjectZomboid() error {
 	if len(i.World.Name) > maxNameLen || !namePattern.MatchString(i.World.Name) {
 		return fmt.Errorf("server name %q must be lowercase letters, digits, - or _: %w", i.World.Name, ErrInvalid)
 	}
-	// Player limits and the join password live in the server ini, not in flags.
-	if i.MaxPlayers != 0 {
-		return fmt.Errorf("max players are configured in the Project Zomboid ini, not by gamehost: %w", ErrInvalid)
+	// Player limits and the join password live in the server ini, which the
+	// driver rewrites before every launch; zero and empty keep the game value.
+	if i.MaxPlayers != 0 && (i.MaxPlayers < 1 || i.MaxPlayers > ProjectZomboidMaxPlayers) {
+		return fmt.Errorf("max players %d must be between 1 and %d: %w", i.MaxPlayers, ProjectZomboidMaxPlayers, ErrInvalid)
 	}
 	if i.GameID != "" {
 		return fmt.Errorf("game id belongs to core keeper: %w", ErrInvalid)
@@ -421,8 +431,9 @@ func (i Instance) validateProjectZomboid() error {
 	if i.Caves {
 		return fmt.Errorf("the caves shard belongs to don't starve together: %w", ErrInvalid)
 	}
-	if i.Network.Password != "" {
-		return fmt.Errorf("join password is configured in the Project Zomboid ini, not by gamehost: %w", ErrInvalid)
+	// A line break would split the value into two ini lines.
+	if len(i.Network.Password) > maxProjectZomboidPasswordLen || strings.ContainsAny(i.Network.Password, "\r\n") {
+		return fmt.Errorf("join password must be at most %d characters on one line: %w", maxProjectZomboidPasswordLen, ErrInvalid)
 	}
 	// The first start waits for an admin password unless it is passed up front.
 	if i.AdminPassword == "" {

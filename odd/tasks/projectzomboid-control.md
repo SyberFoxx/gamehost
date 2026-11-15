@@ -34,7 +34,7 @@ Feature branch `feat/pz-console`, delivery `single-pr`, runner `go test -race ./
 | T3 | S1, S3 | inline | done — launch stdin, stop hook, window |
 | T4 | S2 | inline | done — `stopInstance` console path |
 | T5 | S8 | inline | done — design.md, AGENTS.md, README, M19 |
-| T6 | S4 | inline | pending — `MaxPlayers=` and `Password=` in the ini |
+| T6 | S4 | inline | done — `MaxPlayers=` and `Password=` in the ini (`internal/projectzomboid/launcher.go`) |
 | T7 | S5 | inline | pending — `game.AdminStore` through the console |
 | T8 | S6, S7 | inline | pending — workshop id resolution and mod order |
 
@@ -59,3 +59,10 @@ Feature branch `feat/pz-console`, delivery `single-pr`, runner `go test -race ./
   `gofmt`, `go vet` and `go test -race ./...`. The three specs that were never started stay open as
   T6–T8: S4 (`MaxPlayers`/`Password`), S5 (PZ admin store through the console) and S6/S7 (workshop
   id resolution, mod order and dependency checks).
+- **L6** (audit): T6 landed as milestone M20. The instance stores the limit and the join password,
+  `game.Preparer` rewrites `MaxPlayers=` and `Password=` in one pass with the autosave interval, and
+  `config` restarts a running server for either. Two traps came out of it: `--max-players` defaults
+  to `8` in `create`, so it only applies to Project Zomboid when the flag is present, and the lobby
+  form submitted hidden fields, which would have leaked that default — `form.submitted()` now drops
+  them. Verified with `gofmt`, `go vet`, `go test -race ./...` and a manual `create`/`show`/
+  `config` run.

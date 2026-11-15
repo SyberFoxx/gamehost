@@ -21,8 +21,17 @@ const ConfigFile = "ProjectZomboid64.json"
 // heapArg is the JVM flag that sets the maximum heap.
 const heapArg = "-Xmx"
 
-// autosaveKey is the server ini key that sets the world save interval.
-const autosaveKey = "SaveWorldEveryMinutes"
+// The server ini keys gamehost owns. Every one of them is rewritten in place
+// before a launch; no other line of the file is touched.
+const (
+	autosaveKey   = "SaveWorldEveryMinutes"
+	maxPlayersKey = "MaxPlayers"
+	passwordKey   = "Password"
+)
+
+// iniKeys is the write order, so a launch that changes two values always
+// produces the same file.
+var iniKeys = []string{autosaveKey, maxPlayersKey, passwordKey}
 
 // Prepare writes the configured heap into the launcher json, which is the only
 // place the dedicated server reads its JVM arguments from. It runs before every
@@ -58,7 +67,7 @@ func prepare(inst instance.Instance, totalBytes int64) error {
 	if err := writeHeap(filepath.Join(inst.InstallDir, ConfigFile), size); err != nil {
 		return err
 	}
-	return writeAutosave(inst)
+	return writeIniSettings(inst)
 }
 
 // checkMemory returns the normalized heap, or the reason the JVM cannot use it.
@@ -134,14 +143,26 @@ func writeHeap(path, memory string) error {
 	return nil
 }
 
-// writeAutosave applies the world autosave interval to the server ini. The
-// file only exists after the first start, so a new instance skips the write and
-// the value applies from the second launch. Only that one line changes.
-func writeAutosave(inst instance.Instance) error {
-	minutes := inst.AutosaveMinutes
-	if minutes <= 0 {
+// writeIniSettings applies the settings gamehost owns to the server ini: the
+// autosave interval, the player limit and the join password. The file only
+// exists after the first start, so a new instance skips the write and the
+// values apply from the second launch. Only those lines change, and a value
+// that is unset or already there leaves the file alone.
+func writeIniSettings(inst instance.Instance) error {
+	wanted := make(map[string]string, len(iniKeys))
+	if inst.AutosaveMinutes > 0 {
+		wanted[autosaveKey] = strconv.Itoa(inst.AutosaveMinutes)
+	}
+	if inst.MaxPlayers > 0 {
+		wanted[maxPlayersKey] = strconv.Itoa(inst.MaxPlayers)
+	}
+	if inst.Network.Password != "" {
+		wanted[passwordKey] = inst.Network.Password
+	}
+	if len(wanted) == 0 {
 		return nil
 	}
+
 	path := IniPath(inst)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -150,12 +171,21 @@ func writeAutosave(inst instance.Instance) error {
 		}
 		return fmt.Errorf("read %q: %w", path, err)
 	}
-	if current := iniValue(strings.Split(strings.TrimSuffix(string(data), "\n"), "\n"), autosaveKey); current == strconv.Itoa(minutes) {
+
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	changed := false
+	for _, key := range iniKeys {
+		value, managed := wanted[key]
+		if !managed || iniValue(lines, key) == value {
+			continue
+		}
+		lines = setIniValue(lines, key, value)
+		changed = true
+	}
+	if !changed {
 		return nil
 	}
 
-	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
-	lines = setIniValue(lines, autosaveKey, strconv.Itoa(minutes))
 	out := []byte(strings.Join(lines, "\n"))
 	if len(out) > 0 && out[len(out)-1] != '\n' {
 		out = append(out, '\n')

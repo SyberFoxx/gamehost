@@ -47,6 +47,7 @@ concurrency and tests with `-race`.
 | M17 | Project Zomboid memory: `--memory` and the lobby field rewrite only the JVM heap | done |
 | M18 | supervisor-owned backup schedule and live settings from the lobby | done |
 | M19 | Project Zomboid console: a controlled `save`/`quit` stop instead of a signal | done |
+| M20 | Project Zomboid player limit and join password from `--max-players` and `--password` | done |
 
 ## Features
 
@@ -56,6 +57,8 @@ concurrency and tests with `-race`.
   player limits, network mode.
 - Runs the server in the foreground or detached, and stops it the way the game documents: a `save`
   and `quit` on the console for Project Zomboid, `SIGTERM` → grace period → `SIGKILL` for the rest.
+- Owns the Project Zomboid ini values with no launch flag: the player limit, the join password and
+  the autosave interval, written line by line before every launch.
 - Refuses a second server on the same world, and stops a detached one from any terminal.
 - Persists the runtime phase so another terminal can see what is happening.
 - Tees server output to both the terminal and a per-run log file.
@@ -307,7 +310,8 @@ missing: after the first start, `cluster.ini` belongs to you and the server.
 It refuses while the server runs, because the server reads these values at launch. The world index
 is fixed after creation; `--world-name` only changes the label players see, not the save. The seed
 matters while a world is generated, so changing it on an existing save does nothing. For Project
-Zomboid, max players and the join password stay in its ini.
+Zomboid, `--max-players` and `--password` have no launch flag: the driver writes `MaxPlayers=` and
+`Password=` into the server ini before every launch, and a value you never set keeps the game's own.
 
 `start` without flags keeps the server in the foreground with its output on the terminal; Ctrl+C
 stops it. `start --detach` hands the server to a supervisor in its own session and returns, so the
@@ -546,13 +550,13 @@ a command would have failed the check.
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--game` | `corekeeper` | `corekeeper`, `projectzomboid` or `dontstarvetogether` |
-| `--max-players` | `8` | player limit, 1–8 (Core Keeper) or 1–64 (Don't Starve Together) |
+| `--max-players` | `8` | player limit, 1–8 (Core Keeper), 1–100 (Project Zomboid) or 1–64 (Don't Starve Together); ignored for Project Zomboid unless you pass it |
 | `--world-name` | per game | world name, Project Zomboid server name (lowercase letters, digits, `-` and `_`) or DST `cluster_name` |
 | `--seed` | random | world seed, only used on first creation (Core Keeper only) |
 | `--mode` | `normal` | `normal`, `hard`, `creative` or `casual` (Core Keeper only) |
 | `--port` | `0` | direct-connect port; `0` keeps the Steam relay (Core Keeper), uses `16261` (Project Zomboid) or `10999` (Don't Starve Together) |
 | `--udp-port` | game port + 1 | Project Zomboid direct port (Project Zomboid only) |
-| `--password` | none | join password, at most 28 characters (Core Keeper only) |
+| `--password` | none | join password, at most 28 characters (Core Keeper) or 64 on one line (Project Zomboid) |
 | `--admin-password` | required | Project Zomboid admin password (Project Zomboid only) |
 | `--game-id` | generated | fixed game ID, 15–28 characters without `Y y x 0 O` (Core Keeper only) |
 | `--cluster-token` | none | Klei token from `accounts.klei.com` (Don't Starve Together online only) |

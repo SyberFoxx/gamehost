@@ -127,6 +127,59 @@ func TestNew(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:  "project zomboid limit and join password",
+			input: "zomboid",
+			opts: Options{
+				Game:          GameProjectZomboid,
+				MaxPlayers:    16,
+				Password:      "amigos",
+				AdminPassword: "secret",
+				InstallDir:    "/srv/files",
+				DataDir:       "/srv/data",
+			},
+			assert: func(t *testing.T, got Instance) {
+				if got.MaxPlayers != 16 || got.Network.Password != "amigos" {
+					t.Errorf("instance = %d/%q, want 16/amigos", got.MaxPlayers, got.Network.Password)
+				}
+			},
+		},
+		{
+			name:  "project zomboid player limit above the documented maximum",
+			input: "zomboid",
+			opts: Options{
+				Game:          GameProjectZomboid,
+				MaxPlayers:    ProjectZomboidMaxPlayers + 1,
+				AdminPassword: "secret",
+				InstallDir:    "/srv/files",
+				DataDir:       "/srv/data",
+			},
+			wantErr: true,
+		},
+		{
+			name:  "project zomboid join password with a line break",
+			input: "zomboid",
+			opts: Options{
+				Game:          GameProjectZomboid,
+				Password:      "amigos\nquit",
+				AdminPassword: "secret",
+				InstallDir:    "/srv/files",
+				DataDir:       "/srv/data",
+			},
+			wantErr: true,
+		},
+		{
+			name:  "project zomboid join password longer than the bound",
+			input: "zomboid",
+			opts: Options{
+				Game:          GameProjectZomboid,
+				Password:      strings.Repeat("a", maxProjectZomboidPasswordLen+1),
+				AdminPassword: "secret",
+				InstallDir:    "/srv/files",
+				DataDir:       "/srv/data",
+			},
+			wantErr: true,
+		},
+		{
 			name:  "dont starve together defaults",
 			input: "cave",
 			opts: Options{

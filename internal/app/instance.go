@@ -18,13 +18,13 @@ import (
 func runCreate(args []string, stdout, stderr io.Writer) error {
 	fs := newFlagSet("create", stderr)
 	gameName := fs.String("game", instance.GameCoreKeeper, "game: corekeeper, projectzomboid or dontstarvetogether")
-	maxPlayers := fs.Int("max-players", 8, "maximum players, 1-8 for core keeper and 1-64 for don't starve together")
+	maxPlayers := fs.Int("max-players", 8, "maximum players, 1-8 for core keeper, 1-100 for project zomboid and 1-64 for don't starve together")
 	worldName := fs.String("world-name", "", "world or server name shown to players")
 	seed := fs.String("seed", "", "world seed, empty means random (corekeeper only)")
 	mode := fs.String("mode", "normal", "world mode: normal, hard, creative or casual (corekeeper only)")
 	port := fs.Int("port", 0, "game port; 0 keeps the relay (corekeeper), 10999 (don't starve together) or 16261 (project zomboid)")
 	udpPort := fs.Int("udp-port", 0, "direct-connect port (projectzomboid only), default game port + 1")
-	password := fs.String("password", "", "join password, at most 28 characters (corekeeper only)")
+	password := fs.String("password", "", "join password: at most 28 characters for core keeper, 64 for project zomboid")
 	adminPassword := fs.String("admin-password", "", "admin password (projectzomboid only)")
 	memory := fs.String("memory", "", "JVM heap such as 4g or 4096m (projectzomboid only), empty uses 8g")
 	autosave := fs.Int("autosave", 0, "world autosave interval in minutes (projectzomboid only), 0 keeps the game default")
@@ -74,6 +74,14 @@ func runCreate(args []string, stdout, stderr io.Writer) error {
 		opts.Password = *password
 		opts.GameID = *gameID
 	case instance.GameProjectZomboid:
+		// The limit and the password are ini values here, and the flag already
+		// defaults to a Core Keeper value: only an explicit flag is a setting.
+		if set["max-players"] {
+			opts.MaxPlayers = *maxPlayers
+		}
+		if set["password"] {
+			opts.Password = *password
+		}
 		opts.Port = *port
 		opts.UDPPort = *udpPort
 		opts.AdminPassword = *adminPassword
@@ -136,10 +144,10 @@ func applySettings(s *store.Store, inst instance.Instance, opts instance.Options
 
 // flagGames maps an option to the games that consume it.
 var flagGames = map[string][]string{
-	"max-players":    {instance.GameCoreKeeper, instance.GameDontStarveTogether},
+	"max-players":    {instance.GameCoreKeeper, instance.GameProjectZomboid, instance.GameDontStarveTogether},
 	"seed":           {instance.GameCoreKeeper},
 	"mode":           {instance.GameCoreKeeper},
-	"password":       {instance.GameCoreKeeper},
+	"password":       {instance.GameCoreKeeper, instance.GameProjectZomboid},
 	"game-id":        {instance.GameCoreKeeper},
 	"name":           {instance.GameCoreKeeper},
 	"udp-port":       {instance.GameProjectZomboid},
@@ -264,12 +272,12 @@ func runShow(args []string, stdout, stderr io.Writer) error {
 // runConfig changes the settings of an existing instance without editing JSON.
 func runConfig(args []string, stdout, stderr io.Writer) error {
 	fs := newFlagSet("config", stderr)
-	maxPlayers := fs.Int("max-players", 0, "maximum players, 1-8 for core keeper and 1-64 for don't starve together")
+	maxPlayers := fs.Int("max-players", 0, "maximum players, 1-8 for core keeper, 1-100 for project zomboid and 1-64 for don't starve together")
 	worldName := fs.String("world-name", "", "world or server name shown to players")
 	mode := fs.String("mode", "", "world mode: normal, hard, creative or casual (corekeeper only)")
 	port := fs.Int("port", 0, "game port; 0 keeps the relay (corekeeper), 10999 (don't starve together) or 16261 (project zomboid)")
 	udpPort := fs.Int("udp-port", 0, "direct-connect port (projectzomboid only)")
-	password := fs.String("password", "", "join password, empty clears it (corekeeper only)")
+	password := fs.String("password", "", "join password, empty clears it for core keeper and leaves the ini alone for project zomboid")
 	adminPassword := fs.String("admin-password", "", "admin password (projectzomboid only)")
 	memory := fs.String("memory", "", "JVM heap such as 4g or 4096m (projectzomboid only), empty uses 8g")
 	autosave := fs.Int("autosave", 0, "world autosave interval in minutes (projectzomboid only), 0 keeps the game default")
@@ -330,11 +338,17 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		if set["world-name"] {
 			return fmt.Errorf("config: --world-name is fixed when the server is created: %w", ErrUsage)
 		}
+		if set["max-players"] {
+			opts.MaxPlayers = *maxPlayers
+		}
 		if set["port"] {
 			opts.Port = *port
 		}
 		if set["udp-port"] {
 			opts.UDPPort = *udpPort
+		}
+		if set["password"] {
+			opts.Password = *password
 		}
 		if set["admin-password"] {
 			opts.AdminPassword = *adminPassword
@@ -388,6 +402,8 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		case name == "backup-every", name == "backup-keep":
 		case name == "memory" && inst.Game == instance.GameProjectZomboid:
 		case name == "autosave" && inst.Game == instance.GameProjectZomboid:
+		case name == "max-players" && inst.Game == instance.GameProjectZomboid:
+		case name == "password" && inst.Game == instance.GameProjectZomboid:
 		default:
 			needsStop = true
 		}
@@ -395,7 +411,9 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	// A value only a launch can apply restarts a server that is already up.
 	// A stopped one only needs the new settings saved.
 	restart := !needsStop && (set["memory"] && opts.Memory != inst.Memory ||
-		set["autosave"] && opts.AutosaveMinutes != inst.AutosaveMinutes)
+		set["autosave"] && opts.AutosaveMinutes != inst.AutosaveMinutes ||
+		set["max-players"] && opts.MaxPlayers != inst.MaxPlayers ||
+		set["password"] && opts.Password != inst.Network.Password)
 	if restart {
 		state, err := s.LoadState(inst.Name)
 		if err != nil {
@@ -477,12 +495,18 @@ func instanceRows(inst instance.Instance) [][2]string {
 		{"port", fmt.Sprint(inst.Network.Port)},
 	}
 	if inst.Game == instance.GameProjectZomboid {
+		// Zero keeps whatever the server wrote into its ini.
+		players := "from the server ini"
+		if inst.MaxPlayers > 0 {
+			players = fmt.Sprint(inst.MaxPlayers)
+		}
 		return append(rows,
 			[2]string{"direct port", fmt.Sprint(inst.Network.UDPPort)},
 			[2]string{"admin password", orDefault(inst.AdminPassword, "(none)")},
 			[2]string{"memory", orDefault(inst.Memory, instance.DefaultProjectZomboidMemory+" (default)")},
 			[2]string{"autosave", autosaveSummary(inst.AutosaveMinutes)},
-			[2]string{"max players", "from the server ini"},
+			[2]string{"max players", players},
+			[2]string{"join password", orDefault(inst.Network.Password, "(none)")},
 			[2]string{"scheduled backup", backupSummary(inst.Backup)},
 		)
 	}

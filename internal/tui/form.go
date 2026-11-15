@@ -114,9 +114,16 @@ func notGame(game string) func(map[string]string) bool {
 	return func(values map[string]string) bool { return values["game"] != game }
 }
 
-// whenGame builds a visibility rule for one game.
-func whenGame(game string) func(map[string]string) bool {
-	return func(values map[string]string) bool { return values["game"] == game }
+// whenGame builds a visibility rule for the games it names.
+func whenGame(games ...string) func(map[string]string) bool {
+	return func(values map[string]string) bool {
+		for _, game := range games {
+			if values["game"] == game {
+				return true
+			}
+		}
+		return false
+	}
 }
 
 // whenOnlineCluster shows the token only for a cluster that registers with
@@ -244,6 +251,20 @@ func (f *form) values() map[string]string {
 	return values
 }
 
+// submitted reads the settings the form sends: a field the current game hides
+// is not one of them, so a default built for another game never leaks into an
+// instance.
+func (f *form) submitted() map[string]string {
+	all := f.values()
+	values := make(map[string]string, len(all))
+	for _, field := range f.fields {
+		if field.visible(all) {
+			values[field.key] = all[field.key]
+		}
+	}
+	return values
+}
+
 // selectable lists the field indices the cursor may land on.
 func (f *form) selectable() []int {
 	values := f.values()
@@ -330,7 +351,7 @@ func (f *form) apply() tea.Cmd {
 	f.err = ""
 	f.busy = true
 
-	values := f.values()
+	values := f.submitted()
 	submit := f.submit
 	return func() tea.Msg {
 		note, err := submit(values)
@@ -454,6 +475,9 @@ func settingsFrom(values map[string]string) Settings {
 	}
 }
 
+// playerHint states the limit each driver enforces.
+const playerHint = "1-8 (Core Keeper), 1-100 (Project Zomboid), 1-64 (Don't Starve Together)"
+
 // modeChoices are the world modes the server accepts.
 var modeChoices = []choice{
 	{"normal", "normal"},
@@ -488,7 +512,7 @@ func newCreateForm(ctx context.Context, backend Backend) screen {
 		textField("world", "World name", "shown to players; empty uses the instance name", ""),
 		textField("seed", "Seed", "empty means random", ""),
 		choiceField("mode", "Mode", "", instanceModeNormal, modeChoices...),
-		textField("players", "Max players", "1-8 (Core Keeper), 1-64 (Don't Starve Together)", "8"),
+		textField("players", "Max players", playerHint, "8"),
 		choiceField("network", "Cluster", "online registers with Klei; offline is LAN only", "online", networkChoices...),
 		textField("port", "Port", "empty uses the default: 10999 for Don't Starve Together", ""),
 		textField("cluster-token", "Cluster token", "from accounts.klei.com, online clusters only", ""),
@@ -507,7 +531,7 @@ func newCreateForm(ctx context.Context, backend Backend) screen {
 		"seed":           whenGame(gameCoreKeeper),
 		"mode":           whenGame(gameCoreKeeper),
 		"players":        notGame(gameProjectZomboid),
-		"password":       whenGame(gameCoreKeeper),
+		"password":       whenGame(gameCoreKeeper, gameProjectZomboid),
 		"game-id":        whenGame(gameCoreKeeper),
 		"network":        whenGame(gameDontStarveTogether),
 		"cluster-token":  whenOnlineCluster,
@@ -541,7 +565,7 @@ func newSettingsForm(ctx context.Context, backend Backend, settings Settings) sc
 		textField("world", "World name", "shown to players", settings.WorldName),
 		textField("seed", "Seed", "empty means random", settings.Seed),
 		choiceField("mode", "Mode", "", settings.Mode, modeChoices...),
-		textField("players", "Max players", "1-8 (Core Keeper), 1-64 (Don't Starve Together)", settings.MaxPlayers),
+		textField("players", "Max players", playerHint, settings.MaxPlayers),
 		choiceField("network", "Cluster", "online registers with Klei; offline is LAN only", settings.Network, networkChoices...),
 		textField("port", "Port", "empty uses the default: 10999 for Don't Starve Together", settings.Port),
 		textField("cluster-token", "Cluster token", "from accounts.klei.com, online clusters only", settings.ClusterToken),
@@ -559,8 +583,7 @@ func newSettingsForm(ctx context.Context, backend Backend, settings Settings) sc
 	setWhen(fields, map[string]func(map[string]string) bool{
 		"seed":           whenGame(gameCoreKeeper),
 		"mode":           whenGame(gameCoreKeeper),
-		"players":        notGame(gameProjectZomboid),
-		"password":       whenGame(gameCoreKeeper),
+		"password":       whenGame(gameCoreKeeper, gameProjectZomboid),
 		"game-id":        whenGame(gameCoreKeeper),
 		"network":        whenGame(gameDontStarveTogether),
 		"cluster-token":  whenOnlineCluster,

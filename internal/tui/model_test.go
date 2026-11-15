@@ -990,6 +990,46 @@ func TestCreateFormPrefillsTheMemoryAndOffersAutosave(t *testing.T) {
 	}
 }
 
+// covers the player limit and the join password a Project Zomboid instance
+// carries in its ini rather than in a launch flag
+func TestProjectZomboidPlayersAndPasswordFields(t *testing.T) {
+	t.Parallel()
+	f := &fake{games: []GameChoice{
+		{Name: gameCoreKeeper, Label: "Core Keeper"},
+		{Name: gameProjectZomboid, Label: "Project Zomboid"},
+	}}
+
+	create := newCreateForm(context.Background(), f.backend()).(*form)
+	create.fields[indexOf(t, create.fields, "game")].current = 1
+
+	players := indexOf(t, create.fields, "players")
+	if create.fields[players].visible(create.values()) {
+		t.Fatal("the wizard offers a player limit it would prefill for another game")
+	}
+	// A hidden field is not part of the settings, so the Core Keeper default
+	// never becomes a Project Zomboid limit on its own.
+	if got := settingsFrom(create.submitted()).MaxPlayers; got != "" {
+		t.Fatalf("submitted max players = %q, want the index left to the game", got)
+	}
+	if !create.fields[indexOf(t, create.fields, "password")].visible(create.values()) {
+		t.Fatal("Project Zomboid hides the join password")
+	}
+
+	editor := newSettingsForm(context.Background(), f.backend(), Settings{
+		Game:       gameProjectZomboid,
+		Name:       "zomboid",
+		MaxPlayers: "16",
+		Password:   "amigos",
+	}).(*form)
+	if !editor.fields[indexOf(t, editor.fields, "players")].visible(editor.values()) {
+		t.Fatal("the editor hides the player limit")
+	}
+	got := settingsFrom(editor.submitted())
+	if got.MaxPlayers != "16" || got.Password != "amigos" {
+		t.Fatalf("settingsFrom lost the limit or the password: %+v", got)
+	}
+}
+
 // covers the schedule form saving without stopping the server
 func TestScheduleFormSavesWithoutAStop(t *testing.T) {
 	t.Parallel()

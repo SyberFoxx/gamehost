@@ -365,6 +365,60 @@ func TestPrepareWritesAutosave(t *testing.T) {
 	}
 }
 
+// covers the player limit and the join password written into the server ini
+func TestPrepareWritesPlayersAndPassword(t *testing.T) {
+	t.Parallel()
+
+	dir := writeLauncher(t, launcherJSON)
+	data, ini := writeIni(t, "PVP=true\nMaxPlayers=32\nPassword=\nPublic=true\n")
+	inst := newInstance(t)
+	inst.InstallDir = dir
+	inst.DataDir = data
+	inst.MaxPlayers = 16
+	inst.Network.Password = "amigos"
+
+	if err := prepare(inst, 16<<30); err != nil {
+		t.Fatalf("prepare error = %v", err)
+	}
+	raw, err := os.ReadFile(ini)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only those two lines change; every other byte of the ini survives.
+	want := "PVP=true\nMaxPlayers=16\nPassword=amigos\nPublic=true\n"
+	if string(raw) != want {
+		t.Errorf("ini = %q, want %q", raw, want)
+	}
+
+	// A key the server never wrote is appended in the write order.
+	data, ini = writeIni(t, "PVP=true\n")
+	inst.DataDir = data
+	if err := prepare(inst, 16<<30); err != nil {
+		t.Fatalf("prepare error = %v", err)
+	}
+	if raw, err = os.ReadFile(ini); err != nil {
+		t.Fatal(err)
+	}
+	if want := "PVP=true\nMaxPlayers=16\nPassword=amigos\n"; string(raw) != want {
+		t.Errorf("ini = %q, want %q", raw, want)
+	}
+
+	// An unset value keeps whatever the server wrote.
+	data, ini = writeIni(t, "MaxPlayers=32\nPassword=amigos\n")
+	inst.DataDir = data
+	inst.MaxPlayers = 0
+	inst.Network.Password = ""
+	if err := prepare(inst, 16<<30); err != nil {
+		t.Fatalf("prepare error = %v", err)
+	}
+	if raw, err = os.ReadFile(ini); err != nil {
+		t.Fatal(err)
+	}
+	if want := "MaxPlayers=32\nPassword=amigos\n"; string(raw) != want {
+		t.Errorf("ini = %q, want the game value kept", raw)
+	}
+}
+
 // covers validating a heap without writing a file
 func TestValidate(t *testing.T) {
 	t.Parallel()

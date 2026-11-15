@@ -127,18 +127,25 @@ Candidates, easiest first:
   `World.Index` slot, and archives `data/` first when it is not empty. Core Keeper saves do not
   start with the gzip magic their extension suggests; never re-add a header check.
 - `config` only edits `instance.json` for values the launch flags and the driver consume (players,
-  mode, port, password, game ID, admin password, Project Zomboid memory and autosave, cluster token,
-  offline, caves, backup window). Never write `ServerConfig.json`, `Admins.json` or the Project
-  Zomboid ini from it; the driver and the server own those files.
+  mode, port, password, game ID, admin password, Project Zomboid memory, autosave, player limit and
+  join password, cluster token, offline, caves, backup window). Never write `ServerConfig.json`,
+  `Admins.json` or the Project Zomboid ini from it; the driver and the server own those files.
 - `config` splits its settings by who reads them. Launch flags still require a stopped server. The
   backup schedule applies live because the supervisor reloads the instance every tick. A Project
-  Zomboid heap or autosave change is validated (pure, no file write) and then the running server is
-  restarted by `config` itself; a stopped server only gets the new value saved.
-- The one exception for the Project Zomboid ini is `mods add|remove`: it rewrites only the
-  `WorkshopItems=` and `Mods=` lines, in place, byte for byte, and only while stopped. The second is
-  the autosave interval, which `game.Preparer` writes into `SaveWorldEveryMinutes=` before a launch
-  (line replacement only, skipped while the ini does not exist yet). Do not generalize those writes
-  to other keys.
+  Zomboid heap, autosave, player limit or join password change is validated (pure, no file write)
+  and then the running server is restarted by `config` itself; a stopped server only gets the new
+  value saved.
+- gamehost owns exactly five Project Zomboid ini keys. `mods add|remove` rewrites only
+  `WorkshopItems=` and `Mods=`, in place, byte for byte, and only while stopped. `game.Preparer`
+  writes `SaveWorldEveryMinutes=`, `MaxPlayers=` and `Password=` before every launch, as line
+  replacements, skipped while the ini does not exist yet and skipped for a value the instance does
+  not set (zero players or an empty password means "the game's own value", never "clear it"). Do
+  not generalize those writes to other keys, and do not make an unset value overwrite the file.
+- `-max-players` defaults to `8` in `create` because Core Keeper needs a limit. For Project Zomboid
+  it is only applied when the flag is present; otherwise an instance would silently override the
+  server's own 32 players. The lobby wizard hides that field for Project Zomboid for the same
+  reason, and `form.submitted()` drops every hidden field so a default built for another game never
+  leaks into an instance. Do not read `form.values()` when submitting.
 - The scheduled backup is a maintenance window: stop, archive, prune, start again. The supervisor
   owns the loop, so `start --detach`, the lobby and the systemd unit all get it; `serve` and the
   panel run no scheduler and there is no systemd timer. A failed archive must still restart the

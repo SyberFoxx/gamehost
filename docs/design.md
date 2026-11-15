@@ -130,14 +130,16 @@ Primary source: [PZwiki, Dedicated server](https://pzwiki.net/wiki/Dedicated_ser
 | World data | `-cachedir=<dir>`; default `~/Zomboid` |
 | Files inside the cache | `Server/<name>.ini` plus `.lua` files, `Saves/Multiplayer/<name>/`, `db/`, `Logs/` |
 | Join | No game ID: players add the address and port in the Favorites tab |
-| Player limit and join password | only in `Server/<name>.ini`, no launch flag |
+| Player limit and join password | `MaxPlayers=` and `Password=` in `Server/<name>.ini`, no launch flag; gamehost rewrites those two lines before a launch |
 | Mods | `WorkshopItems=<id>;<id>` and `Mods=<id>;<id>` at the top of `Server/<name>.ini` |
 | Console | commands arrive on the server's stdin; gamehost creates `<cachedir>/gamehost.control` as a fifo and the launch reads it, which is the documented `echo save > ...` / `echo quit > ...` path |
 | Stop | `save`, then `quit` on the console; `SIGTERM` and `SIGKILL` only for a server that ignores it |
 
 The driver passes only what a flag can express: server name, both ports, cache directory and the
-admin password. Max players and the join password stay in the ini, which the server also rewrites,
-so gamehost does not fight it.
+admin password. The player limit and the join password have no launch flag, so the instance stores
+them and the driver writes `MaxPlayers=` and `Password=` into the ini before every launch, line by
+line. The server rewrites other keys of that file; these two are gamehost's, and an instance that
+does not set them leaves whatever the server wrote — its own default is 32 players and no password.
 
 The console is how a Project Zomboid server is asked to stop. gamehost creates
 `<cachedir>/gamehost.control` as a fifo and hands its read end to the launch as standard input; the
@@ -147,10 +149,12 @@ scheduled backup window write `save` and `quit`, and only fall back to the signa
 server has not left after 30 seconds. A game without a console never opens one and keeps the signal
 stop unchanged.
 
-The one deliberate exception to "the ini belongs to the server" is the mod list. `mods add` and
-`mods remove` rewrite only the `WorkshopItems=` and `Mods=` lines, leave every other byte in place
-and run only while the server is stopped; `mods list` reads the same two lines. A missing ini means
-the server has never started, and the command says so instead of inventing a file.
+The ini is not entirely the server's: gamehost owns five keys. `mods add` and `mods remove` rewrite
+only `WorkshopItems=` and `Mods=`, leave every other byte in place and run only while the server is
+stopped; `mods list` reads the same two lines. The autosave interval, the player limit and the join
+password are written by the driver before every launch, again line by line and only when the
+instance sets them, so the game keeps its own default for a value nobody chose. A missing ini means
+the server has never started, and `mods` says so instead of inventing a file.
 
 ### Don't Starve Together
 
@@ -455,13 +459,15 @@ flags. Two decisions shape it:
   not own. `-maxplayers` and `-worldmode` are flags, so they are safe to change. The exceptions are
   `admin`, which owns no schema of its own — it edits the exact document the server writes, only
   while stopped, and renumbers the entries the way the server does — `mods`, which rewrites the two
-  mod lines in place, and the world autosave interval, which the driver writes into
-  `SaveWorldEveryMinutes=` before a launch.
+  mod lines in place, and the three Project Zomboid ini values the driver writes before a launch:
+  the world autosave interval (`SaveWorldEveryMinutes=`), the player limit (`MaxPlayers=`) and the
+  join password (`Password=`). Each of them is a single-line replacement, and only for a value the
+  instance actually sets.
 - **It distinguishes what a launch reads from what the supervisor reads.** The launch flags
   (`--port`, `--admin-password`, …) still need a stopped server. The backup schedule applies live:
-  the supervisor reloads the instance every tick. A Project Zomboid heap or autosave change is
-  validated and then applied by restarting a running server, so the setting never waits silently
-  for the next unrelated restart.
+  the supervisor reloads the instance every tick. A Project Zomboid heap, autosave, player limit or
+  join password change is validated and then applied by restarting a running server, so the setting
+  never waits silently for the next unrelated restart.
 - **The world index is immutable; the name is a launch flag.** `-worldname` is passed on every
   start, so `config --world-name` renames what players see without touching the save. The index
   selects `worlds/<index>.world.gzip` and a different one is a different world, not a setting. The
@@ -541,6 +547,7 @@ Why this shape:
 | M17 | configurable server memory | `--memory 4g` and the lobby field change the Project Zomboid heap, the value survives `update` and a restart, every other vmArg is preserved, and an impossible heap is refused before the launcher runs | driver-owned json rewrite behind `game.Preparer`, JVM size parsing shared with the model, `/proc/meminfo` as the sanity bound |
 | M18 | supervisor-owned schedule and live settings | the scheduled window runs for a TUI, detached or systemd server, archives, prunes per class and restarts, every step in the run log; the TUI Backups screen shows the schedule and the newest archive and `e` edits it live; a Project Zomboid heap is always stored, changing it restarts a running server, and `--autosave` sets `SaveWorldEveryMinutes` | a loop behind the existing supervisor, reload-on-tick for live settings, driver-owned ini line rewrite, retention split by archive class |
 | M19 | Project Zomboid console channel | a launch reads `<cachedir>/gamehost.control`, `stop`, Ctrl+C and the backup window save and quit through it, a hung server still ends by signal, and a game without a console keeps the signal stop | a fifo held read-write, an optional driver interface the lifecycle asserts, escalation only after a bounded window |
+| M20 | Project Zomboid player limit and join password | `--max-players` and `--password` are stored on the instance and written into `Server/<name>.ini` as `MaxPlayers=` and `Password=` before every launch, every other byte survives, an unset value keeps the game's own, and `config` restarts a running server for it | driver-owned ini line rewrite behind `game.Preparer`, values checked against the documented range before the server is stopped |
 
 Each milestone is one work unit: code, tests and doc updates in the same commit.
 

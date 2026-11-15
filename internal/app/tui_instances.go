@@ -137,9 +137,11 @@ func lobbyUpdate(name string, change tui.Settings) (tui.Detail, error) {
 	}
 
 	// The launch flags are read at start, so a change to them needs the server
-	// stopped. The schedule applies live, and the heap and the autosave only
-	// need a restart of a server that is already up.
-	restart := opts.Memory != inst.Memory || opts.AutosaveMinutes != inst.AutosaveMinutes
+	// stopped. The schedule applies live, and the heap, the autosave, the
+	// player limit and the join password only need a restart of a server that
+	// is already up.
+	restart := opts.Memory != inst.Memory || opts.AutosaveMinutes != inst.AutosaveMinutes ||
+		opts.MaxPlayers != inst.MaxPlayers || opts.Password != inst.Network.Password
 	if launchSettingsChanged(inst, opts) {
 		release, err := requireStopped(s, inst, "config")
 		if err != nil {
@@ -175,13 +177,21 @@ func lobbyUpdate(name string, change tui.Settings) (tui.Detail, error) {
 // launchSettingsChanged reports whether an edit touches a value the server
 // only reads at start.
 func launchSettingsChanged(inst instance.Instance, opts instance.Options) bool {
+	// Project Zomboid keeps the player limit and the join password in its ini,
+	// which the driver rewrites before a launch: changing them is a restart,
+	// not a stop.
+	players := opts.MaxPlayers != inst.MaxPlayers
+	password := opts.Password != inst.Network.Password
+	if inst.Game == instance.GameProjectZomboid {
+		players, password = false, false
+	}
 	return opts.WorldName != inst.World.Name ||
 		opts.Seed != inst.World.Seed ||
 		opts.Mode != inst.World.Mode ||
-		opts.MaxPlayers != inst.MaxPlayers ||
+		players ||
 		opts.Port != inst.Network.Port ||
 		opts.UDPPort != inst.Network.UDPPort ||
-		opts.Password != inst.Network.Password ||
+		password ||
 		opts.AdminPassword != inst.AdminPassword ||
 		opts.GameID != inst.GameID ||
 		opts.ClusterToken != inst.ClusterToken ||
@@ -300,10 +310,17 @@ func projectZomboidOptions(settings tui.Settings, opts instance.Options) (instan
 		return instance.Options{}, err
 	}
 
+	players, err := parseInt("max players", settings.MaxPlayers)
+	if err != nil {
+		return instance.Options{}, err
+	}
+
 	opts.Game = instance.GameProjectZomboid
 	opts.WorldName = settings.WorldName
+	opts.MaxPlayers = players
 	opts.Port = port
 	opts.UDPPort = udp
+	opts.Password = settings.Password
 	opts.AdminPassword = settings.AdminPassword
 	opts.Memory = settings.Memory
 	opts.AutosaveMinutes, err = parseInt("autosave", settings.AutosaveMinutes)
@@ -369,7 +386,7 @@ func settingsOf(inst instance.Instance) tui.Settings {
 		WorldName:       inst.World.Name,
 		Seed:            inst.World.Seed,
 		Mode:            string(inst.World.Mode),
-		MaxPlayers:      strconv.Itoa(inst.MaxPlayers),
+		MaxPlayers:      intOrEmpty(inst.MaxPlayers),
 		Port:            strconv.Itoa(inst.Network.Port),
 		UDPPort:         strconv.Itoa(inst.Network.UDPPort),
 		Password:        inst.Network.Password,

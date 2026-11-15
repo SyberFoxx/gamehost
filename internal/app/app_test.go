@@ -478,7 +478,7 @@ func TestCreateRejectsForeignFlags(t *testing.T) {
 	t.Setenv("GAMEHOST_HOME", t.TempDir())
 
 	tests := [][]string{
-		{"create", "zomboid", "--game", "projectzomboid", "--admin-password", "secret", "--max-players", "4"},
+		{"create", "zomboid", "--game", "projectzomboid", "--admin-password", "secret", "--seed", "1234"},
 		{"create", "zomboid", "--game", "projectzomboid", "--admin-password", "secret", "--mode", "hard"},
 		{"create", "corekeeper", "--admin-password", "secret"},
 		{"create", "corekeeper", "--udp-port", "16262"},
@@ -815,6 +815,56 @@ func TestConfig(t *testing.T) {
 	}
 }
 
+// covers the player limit and the join password of project zomboid
+func TestProjectZomboidPlayersAndPassword(t *testing.T) {
+	t.Setenv("GAMEHOST_HOME", t.TempDir())
+
+	if _, err := runArgs(t, "create", "zomboid", "--game", "projectzomboid",
+		"--admin-password", "secret", "--max-players", "16", "--password", "amigos"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	s := store.New(os.Getenv("GAMEHOST_HOME"))
+	inst, err := s.Load("zomboid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inst.MaxPlayers != 16 || inst.Network.Password != "amigos" {
+		t.Errorf("players/password = %d/%q, want 16/amigos", inst.MaxPlayers, inst.Network.Password)
+	}
+
+	out, err := runArgs(t, "show", "zomboid")
+	if err != nil {
+		t.Fatalf("show error = %v", err)
+	}
+	if !strings.Contains(out, "16") || !strings.Contains(out, "amigos") {
+		t.Errorf("show output = %q, want the limit and the password", out)
+	}
+
+	// The flag defaults to a Core Keeper value, so leaving it out must keep
+	// whatever the server wrote in its ini.
+	if _, err := runArgs(t, "create", "other", "--game", "projectzomboid", "--admin-password", "secret"); err != nil {
+		t.Fatalf("create error = %v", err)
+	}
+	if plain, err := s.Load("other"); err != nil || plain.MaxPlayers != 0 {
+		t.Errorf("max players = %d (error %v), want the game default", plain.MaxPlayers, err)
+	}
+
+	if _, err := runArgs(t, "config", "zomboid", "--max-players", "24", "--password", "otros"); err != nil {
+		t.Fatalf("config error = %v", err)
+	}
+	if inst, err = s.Load("zomboid"); err != nil || inst.MaxPlayers != 24 || inst.Network.Password != "otros" {
+		t.Errorf("players/password = %d/%q (error %v), want 24/otros", inst.MaxPlayers, inst.Network.Password, err)
+	}
+
+	// A limit outside the documented range never reaches the instance.
+	if _, err := runArgs(t, "config", "zomboid", "--max-players", "101"); !errors.Is(err, instance.ErrInvalid) {
+		t.Errorf("config --max-players 101 error = %v, want ErrInvalid", err)
+	}
+	if inst, err = s.Load("zomboid"); err != nil || inst.MaxPlayers != 24 {
+		t.Errorf("max players = %d (error %v), want the last good value", inst.MaxPlayers, err)
+	}
+}
+
 // covers the world autosave flag of project zomboid
 func TestProjectZomboidAutosave(t *testing.T) {
 	t.Setenv("GAMEHOST_HOME", t.TempDir())
@@ -900,8 +950,8 @@ func TestConfigRejectsForeignFlags(t *testing.T) {
 		t.Fatalf("create error = %v", err)
 	}
 
-	if _, err := runArgs(t, "config", "zomboid", "--max-players", "4"); !errors.Is(err, ErrUsage) {
-		t.Errorf("config --max-players error = %v, want ErrUsage", err)
+	if _, err := runArgs(t, "config", "zomboid", "--game-id", "abcdefghijklmnop"); !errors.Is(err, ErrUsage) {
+		t.Errorf("config --game-id error = %v, want ErrUsage", err)
 	}
 	if _, err := runArgs(t, "config", "zomboid", "--udp-port", "16270"); err != nil {
 		t.Errorf("config --udp-port error = %v", err)
