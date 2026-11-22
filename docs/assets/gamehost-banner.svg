@@ -4,26 +4,26 @@
 
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#101822"/>
+      <stop offset="0" stop-color="#102030"/>
       <stop offset="0.55" stop-color="#0B1016"/>
       <stop offset="1" stop-color="#080C11"/>
     </linearGradient>
     <linearGradient id="word" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#FFFFFF"/>
-      <stop offset="1" stop-color="#C4D0DC"/>
+      <stop offset="1" stop-color="#BAE6FD"/>
     </linearGradient>
     <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
-      <circle cx="1" cy="1" r="1" fill="#415466" opacity="0.22"/>
+      <circle cx="1" cy="1" r="1" fill="#3A5A75" opacity="0.22"/>
     </pattern>
   </defs>
 
   <!-- field -->
   <rect width="1600" height="440" fill="url(#bg)"/>
   <rect width="1600" height="440" fill="url(#grid)"/>
-  <rect x="16" y="16" width="1568" height="408" fill="none" stroke="#1F2C3A" stroke-width="1.5"/>
+  <rect x="16" y="16" width="1568" height="408" fill="none" stroke="#1F3142" stroke-width="1.5"/>
 
   <!-- corner registration marks -->
-  <g stroke="#E9A23B" stroke-width="1.5" opacity="0.85">
+  <g stroke="#38BDF8" stroke-width="1.5" opacity="0.85">
     <path d="M16 46 V16 H46" fill="none"/>
     <path d="M1554 16 H1584 V46" fill="none"/>
     <path d="M16 394 V424 H46" fill="none"/>
@@ -32,69 +32,69 @@
 
   <!-- masthead -->
   <g font-family="'JetBrains Mono', monospace">
-    <text x="64" y="58" fill="#5C6E80" font-size="14" letter-spacing="3.2">GAMEHOST / SERVER CONTROL PLANE</text>
-    <text x="1536" y="58" fill="#5C6E80" font-size="14" letter-spacing="2" text-anchor="end">WRITTEN IN GO — BUILT TO EXTEND</text>
+    <text x="64" y="58" fill="#5C7086" font-size="14" letter-spacing="3.2">GAMEHOST / SERVER CONTROL PLANE</text>
+    <text x="1536" y="58" fill="#5C7086" font-size="14" letter-spacing="2" text-anchor="end">WRITTEN IN GO — BUILT TO EXTEND</text>
   </g>
-  <path d="M64 74 H1536" stroke="#1F2C3A" stroke-width="1"/>
+  <path d="M64 74 H1536" stroke="#1F3142" stroke-width="1"/>
 
   <!-- logotype -->
   <g>
-    <rect x="64" y="126" width="72" height="72" rx="9" fill="#121C26" stroke="#E9A23B" stroke-width="1.5"/>
-    <path d="M84 150 L97 162 L84 174" fill="none" stroke="#E9A23B" stroke-width="3" stroke-linecap="square" stroke-linejoin="miter"/>
-    <path d="M101 174 H117" stroke="#E9A23B" stroke-width="3" stroke-linecap="square"/>
+    <rect x="64" y="126" width="72" height="72" rx="9" fill="#10202E" stroke="#38BDF8" stroke-width="1.5"/>
+    <path d="M84 150 L97 162 L84 174" fill="none" stroke="#38BDF8" stroke-width="3" stroke-linecap="square" stroke-linejoin="miter"/>
+    <path d="M101 174 H117" stroke="#38BDF8" stroke-width="3" stroke-linecap="square"/>
     <text x="152" y="196" font-family="Inter, 'Inter Display', sans-serif" font-size="122" font-weight="900" letter-spacing="-6">
-      <tspan fill="url(#word)">game</tspan><tspan fill="#E9A23B">host</tspan>
+      <tspan fill="url(#word)">game</tspan><tspan fill="#38BDF8">host</tspan>
     </text>
-    <rect x="152" y="216" width="530" height="3" fill="#1F2C3A"/>
-    <rect x="152" y="216" width="112" height="3" fill="#E9A23B"/>
+    <rect x="152" y="216" width="530" height="3" fill="#1F3142"/>
+    <rect x="152" y="216" width="112" height="3" fill="#38BDF8"/>
   </g>
 
   <!-- position line -->
   <g font-family="'JetBrains Mono', monospace">
-    <text x="64" y="278" fill="#A9B7C4" font-size="17" letter-spacing="3.4">ONE CONTROL PLANE / MANY DEDICATED SERVERS</text>
+    <text x="64" y="278" fill="#A5BDD0" font-size="17" letter-spacing="3.4">ONE CONTROL PLANE / MANY DEDICATED SERVERS</text>
   </g>
-  <text x="64" y="313" font-family="Inter, sans-serif" font-size="23" font-weight="400" fill="#64778A">install <tspan fill="#3B4A59">/</tspan> configure <tspan fill="#3B4A59">/</tspan> run <tspan fill="#3B4A59">/</tspan> inspect <tspan fill="#3B4A59">/</tspan> back up <tspan fill="#3B4A59">/</tspan> extend</text>
+  <text x="64" y="313" font-family="Inter, sans-serif" font-size="23" font-weight="400" fill="#7E96AC">install <tspan fill="#3A5065">/</tspan> configure <tspan fill="#3A5065">/</tspan> run <tspan fill="#3A5065">/</tspan> inspect <tspan fill="#3A5065">/</tspan> back up <tspan fill="#3A5065">/</tspan> extend</text>
 
   <!-- terminal cue -->
-  <rect x="64" y="344" width="192" height="36" rx="5" fill="#121C26" stroke="#1F2C3A" stroke-width="1"/>
-  <text x="80" y="369" font-family="'JetBrains Mono', monospace" font-size="17" fill="#E9A23B">$ gamehost</text>
-  <rect x="197" y="355" width="9" height="15" fill="#E9A23B" opacity="0.9"/>
+  <rect x="64" y="344" width="192" height="36" rx="5" fill="#10202E" stroke="#1F3142" stroke-width="1"/>
+  <text x="80" y="369" font-family="'JetBrains Mono', monospace" font-size="17" fill="#38BDF8">$ gamehost</text>
+  <rect x="197" y="355" width="9" height="15" fill="#38BDF8" opacity="0.9"/>
 
   <!-- divider -->
-  <path d="M952 104 V372" stroke="#1F2C3A" stroke-width="1"/>
-  <path d="M952 232 L960 240 L952 248 L944 240 Z" fill="#E9A23B"/>
+  <path d="M952 104 V372" stroke="#1F3142" stroke-width="1"/>
+  <path d="M952 232 L960 240 L952 248 L944 240 Z" fill="#38BDF8"/>
 
   <!-- architecture: extensible, not a fixed game list -->
   <g font-family="'JetBrains Mono', monospace">
-    <text x="1000" y="120" fill="#5C6E80" font-size="14" letter-spacing="3.2">BUILT TO EXTEND</text>
+    <text x="1000" y="120" fill="#5C7086" font-size="14" letter-spacing="3.2">BUILT TO EXTEND</text>
   </g>
-  <path d="M1000 136 H1536" stroke="#1F2C3A" stroke-width="1"/>
+  <path d="M1000 136 H1536" stroke="#1F3142" stroke-width="1"/>
 
   <g font-family="'JetBrains Mono', monospace">
-    <text x="1000" y="180" font-size="14" fill="#E9A23B">01</text>
-    <text x="1052" y="180" font-size="22" fill="#E4EDF5" letter-spacing="1">STEAMCMD</text>
-    <text x="1536" y="180" font-size="15" fill="#64778A" text-anchor="end">anonymous installs</text>
-    <path d="M1000 194 H1536" stroke="#1F2C3A" stroke-width="1"/>
+    <text x="1000" y="180" font-size="14" fill="#38BDF8">01</text>
+    <text x="1052" y="180" font-size="22" fill="#EAF4FC" letter-spacing="1">STEAMCMD</text>
+    <text x="1536" y="180" font-size="15" fill="#7E96AC" text-anchor="end">anonymous installs</text>
+    <path d="M1000 194 H1536" stroke="#1F3142" stroke-width="1"/>
 
-    <text x="1000" y="236" font-size="14" fill="#E9A23B">02</text>
-    <text x="1052" y="236" font-size="22" fill="#E4EDF5" letter-spacing="1">PROCESS</text>
-    <text x="1536" y="236" font-size="15" fill="#64778A" text-anchor="end">supervised lifecycle</text>
-    <path d="M1000 250 H1536" stroke="#1F2C3A" stroke-width="1"/>
+    <text x="1000" y="236" font-size="14" fill="#38BDF8">02</text>
+    <text x="1052" y="236" font-size="22" fill="#EAF4FC" letter-spacing="1">PROCESS</text>
+    <text x="1536" y="236" font-size="15" fill="#7E96AC" text-anchor="end">supervised lifecycle</text>
+    <path d="M1000 250 H1536" stroke="#1F3142" stroke-width="1"/>
 
-    <text x="1000" y="292" font-size="14" fill="#E9A23B">03</text>
-    <text x="1052" y="292" font-size="22" fill="#E4EDF5" letter-spacing="1">BACKUP</text>
-    <text x="1536" y="292" font-size="15" fill="#64778A" text-anchor="end">scheduled windows</text>
-    <path d="M1000 306 H1536" stroke="#1F2C3A" stroke-width="1"/>
+    <text x="1000" y="292" font-size="14" fill="#38BDF8">03</text>
+    <text x="1052" y="292" font-size="22" fill="#EAF4FC" letter-spacing="1">BACKUP</text>
+    <text x="1536" y="292" font-size="15" fill="#7E96AC" text-anchor="end">scheduled windows</text>
+    <path d="M1000 306 H1536" stroke="#1F3142" stroke-width="1"/>
 
-    <text x="1000" y="348" font-size="18" fill="#E9A23B">+</text>
-    <text x="1052" y="348" font-size="22" fill="#E9A23B" letter-spacing="1">YOUR GAME</text>
-    <text x="1536" y="348" font-size="15" fill="#64778A" text-anchor="end">one driver package</text>
-    <path d="M1000 362 H1536" stroke="#1F2C3A" stroke-width="1"/>
+    <text x="1000" y="348" font-size="18" fill="#38BDF8">+</text>
+    <text x="1052" y="348" font-size="22" fill="#38BDF8" letter-spacing="1">YOUR GAME</text>
+    <text x="1536" y="348" font-size="15" fill="#7E96AC" text-anchor="end">one driver package</text>
+    <path d="M1000 362 H1536" stroke="#1F3142" stroke-width="1"/>
   </g>
 
   <!-- footer -->
   <g font-family="'JetBrains Mono', monospace">
-    <text x="1000" y="390" fill="#5C6E80" font-size="14" letter-spacing="2.4">STEAMCMD · SYSTEMD · TUI · API</text>
-    <text x="64" y="408" fill="#3B4A59" font-size="12" letter-spacing="2">GAMEHOST // ONE CONTROL PLANE FOR EVERY DEDICATED SERVER</text>
+    <text x="1000" y="390" fill="#5C7086" font-size="14" letter-spacing="2.4">STEAMCMD · SYSTEMD · TUI · API</text>
+    <text x="64" y="408" fill="#3A5065" font-size="12" letter-spacing="2">GAMEHOST // ONE CONTROL PLANE FOR EVERY DEDICATED SERVER</text>
   </g>
 </svg>

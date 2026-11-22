@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="210" viewBox="0 0 1000 210" role="img" aria-labelledby="t d">
+  <title id="t">gamehost</title>
+  <desc id="d">One control plane for every dedicated server. Terminal-first, driver-based, built to grow.</desc>
+
+  <defs>
+    <linearGradient id="title" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.22" stop-color="#BAE6FD"/>
+      <stop offset="0.5" stop-color="#7DD3FC"/>
+      <stop offset="0.74" stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#0EA5E9"/>
+    </linearGradient>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#102030"/>
+      <stop offset="1" stop-color="#0B1016"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1000" height="210" rx="14" fill="url(#plate)" stroke="#1F3142" stroke-width="1.5"/>
+
+  <text x="500" y="112" text-anchor="middle" font-family="Inter, 'Inter Display', sans-serif" font-size="100" font-weight="900" letter-spacing="-5" fill="url(#title)">gamehost</text>
+  <rect x="360" y="132" width="280" height="2" fill="#1F3142"/>
+  <rect x="470" y="132" width="60" height="2" fill="#38BDF8"/>
+
+  <text x="500" y="168" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="17" letter-spacing="2.6" fill="#7DD3FC">ONE CONTROL PLANE FOR EVERY DEDICATED SERVER</text>
+  <text x="500" y="193" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="13" letter-spacing="2" fill="#5C7086">TERMINAL-FIRST · DRIVER-BASED · BUILT TO GROW</text>
+</svg>

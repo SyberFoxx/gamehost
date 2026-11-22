@@ -1,14 +1,9 @@
 <p align="center">
-  <img src="docs/assets/gamehost-banner-v3.png" alt="gamehost — one control plane for every dedicated server" width="100%">
+  <img src="docs/assets/gamehost-banner-v4.png" alt="gamehost — one control plane for every dedicated server" width="100%">
 </p>
 
-<h1 align="center">
-  <span style="color:#0369A1">g</span><span style="color:#0284C7">a</span><span style="color:#0EA5E9">m</span><span style="color:#38BDF8">e</span><span style="color:#7DD3FC">h</span><span style="color:#38BDF8">o</span><span style="color:#0EA5E9">s</span><span style="color:#0284C7">t</span>
-</h1>
-
 <p align="center">
-  <strong style="color:#38BDF8">One control plane for every dedicated server.</strong><br>
-  <span style="color:#64748B">Terminal-first · driver-based · built to grow</span>
+  <img src="docs/assets/gamehost-title.png" alt="gamehost — one control plane for every dedicated server" width="640">
 </p>
 
 [![CI](https://github.com/SyberFoxx/gamehost/actions/workflows/ci.yml/badge.svg)](https://github.com/SyberFoxx/gamehost/actions/workflows/ci.yml)
