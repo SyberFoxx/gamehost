@@ -1,8 +1,6 @@
-<!-- TODO(banner): uncomment and add the image at docs/assets/banner.png
 <p align="center">
-  <img src="docs/assets/banner.png" alt="gamehost" width="100%">
+  <img src="docs/assets/gamehost-banner.png" alt="gamehost — terminal-first manager for dedicated game servers" width="100%">
 </p>
--->
 
 # gamehost
 
