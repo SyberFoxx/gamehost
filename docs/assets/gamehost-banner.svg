@@ -3,45 +3,92 @@
   <desc id="desc">Terminal-first manager for Core Keeper, Project Zomboid and Don't Starve Together dedicated servers.</desc>
 
   <defs>
-    <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
-      <circle cx="2" cy="2" r="1.2" fill="#5B6B7B" opacity="0.16"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101822"/>
+      <stop offset="0.55" stop-color="#0B1016"/>
+      <stop offset="1" stop-color="#080C11"/>
+    </linearGradient>
+    <linearGradient id="word" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#C4D0DC"/>
+    </linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="#415466" opacity="0.22"/>
     </pattern>
   </defs>
 
-  <rect width="1600" height="440" fill="#0B0F14"/>
-  <rect width="1600" height="440" fill="url(#dots)"/>
-  <rect x="12" y="12" width="1576" height="416" fill="none" stroke="#26333F" stroke-width="2"/>
-  <rect x="12" y="12" width="120" height="4" fill="#F0A33B"/>
+  <!-- field -->
+  <rect width="1600" height="440" fill="url(#bg)"/>
+  <rect width="1600" height="440" fill="url(#grid)"/>
+  <rect x="16" y="16" width="1568" height="408" fill="none" stroke="#1F2C3A" stroke-width="1.5"/>
 
-  <g font-family="'Noto Sans Mono', 'DejaVu Sans Mono', ui-monospace, monospace">
-    <text x="64" y="86" fill="#7B8C9B" font-size="21" letter-spacing="5">TERMINAL-FIRST SERVER CONTROL</text>
+  <!-- corner registration marks -->
+  <g stroke="#E9A23B" stroke-width="1.5" opacity="0.85">
+    <path d="M16 46 V16 H46" fill="none"/>
+    <path d="M1554 16 H1584 V46" fill="none"/>
+    <path d="M16 394 V424 H46" fill="none"/>
+    <path d="M1554 424 H1584 V394" fill="none"/>
+  </g>
 
-    <text x="60" y="205" font-size="112" font-weight="bold" letter-spacing="-4">
-      <tspan fill="#E9EFF5">game</tspan><tspan fill="#F0A33B">host</tspan>
+  <!-- masthead -->
+  <g font-family="'JetBrains Mono', monospace">
+    <text x="64" y="58" fill="#5C6E80" font-size="14" letter-spacing="3.2">GAMEHOST / INFRASTRUCTURE</text>
+    <text x="1536" y="58" fill="#5C6E80" font-size="14" letter-spacing="2" text-anchor="end">v1.0 — LINUX</text>
+  </g>
+  <path d="M64 74 H1536" stroke="#1F2C3A" stroke-width="1"/>
+
+  <!-- logotype -->
+  <g>
+    <rect x="64" y="126" width="70" height="70" rx="9" fill="#121C26" stroke="#E9A23B" stroke-width="1.5"/>
+    <path d="M83 150 L95 161 L83 172" fill="none" stroke="#E9A23B" stroke-width="3" stroke-linecap="square" stroke-linejoin="miter"/>
+    <path d="M99 172 H114" stroke="#E9A23B" stroke-width="3" stroke-linecap="square"/>
+    <text x="152" y="194" font-family="Inter, 'Inter Display', sans-serif" font-size="118" font-weight="900" letter-spacing="-6">
+      <tspan fill="url(#word)">game</tspan><tspan fill="#E9A23B">host</tspan>
     </text>
-    <rect x="64" y="235" width="96" height="5" fill="#F0A33B"/>
-    <text x="64" y="296" fill="#A8B6C3" font-size="27">install / configure / run / inspect / back up</text>
-    <text x="64" y="370" fill="#627382" font-size="20" letter-spacing="1">$ gamehost</text>
-    <rect x="202" y="352" width="12" height="22" fill="#F0A33B" opacity="0.9"/>
+    <rect x="152" y="214" width="524" height="3" fill="#1F2C3A"/>
+    <rect x="152" y="214" width="112" height="3" fill="#E9A23B"/>
+  </g>
 
-    <line x1="1000" y1="64" x2="1000" y2="376" stroke="#26333F" stroke-width="2"/>
+  <!-- position line -->
+  <g font-family="'JetBrains Mono', monospace">
+    <text x="64" y="278" fill="#A9B7C4" font-size="17" letter-spacing="3.4">DEDICATED SERVER ORCHESTRATION</text>
+  </g>
+  <text x="64" y="313" font-family="Inter, sans-serif" font-size="23" font-weight="400" fill="#64778A">install <tspan fill="#3B4A59">/</tspan> configure <tspan fill="#3B4A59">/</tspan> run <tspan fill="#3B4A59">/</tspan> inspect <tspan fill="#3B4A59">/</tspan> back up</text>
 
-    <text x="1040" y="86" fill="#7B8C9B" font-size="21" letter-spacing="5">SUPPORTED DRIVERS</text>
+  <!-- terminal cue -->
+  <rect x="64" y="344" width="192" height="36" rx="5" fill="#121C26" stroke="#1F2C3A" stroke-width="1"/>
+  <text x="80" y="369" font-family="'JetBrains Mono', monospace" font-size="17" fill="#E9A23B">$ gamehost</text>
+  <rect x="197" y="355" width="9" height="15" fill="#E9A23B" opacity="0.9"/>
 
-    <rect x="1042" y="128" width="11" height="11" fill="#4FB3A5"/>
-    <text x="1074" y="144" fill="#E9EFF5" font-size="29">Core Keeper</text>
-    <text x="1520" y="143" fill="#718292" font-size="21" text-anchor="end">1963720</text>
-    <line x1="1040" y1="176" x2="1520" y2="176" stroke="#202B36" stroke-width="1"/>
+  <!-- divider -->
+  <path d="M952 104 V372" stroke="#1F2C3A" stroke-width="1"/>
+  <path d="M952 232 L960 240 L952 248 L944 240 Z" fill="#E9A23B"/>
 
-    <rect x="1042" y="208" width="11" height="11" fill="#F0A33B"/>
-    <text x="1074" y="224" fill="#E9EFF5" font-size="29">Project Zomboid</text>
-    <text x="1520" y="223" fill="#718292" font-size="21" text-anchor="end">380870</text>
-    <line x1="1040" y1="256" x2="1520" y2="256" stroke="#202B36" stroke-width="1"/>
+  <!-- engines -->
+  <g font-family="'JetBrains Mono', monospace">
+    <text x="1000" y="120" fill="#5C6E80" font-size="14" letter-spacing="3.2">SUPPORTED ENGINES</text>
+  </g>
+  <path d="M1000 136 H1536" stroke="#1F2C3A" stroke-width="1"/>
 
-    <rect x="1042" y="288" width="11" height="11" fill="#8A94E0"/>
-    <text x="1074" y="304" fill="#E9EFF5" font-size="29">Don't Starve Together</text>
-    <text x="1520" y="303" fill="#718292" font-size="21" text-anchor="end">343050</text>
+  <g font-family="Inter, sans-serif">
+    <text x="1000" y="188" font-family="'JetBrains Mono', monospace" font-size="14" fill="#E9A23B">01</text>
+    <text x="1052" y="190" font-size="28" font-weight="600" fill="#E4EDF5">Core Keeper</text>
+    <text x="1536" y="188" font-family="'JetBrains Mono', monospace" font-size="16" fill="#64778A" text-anchor="end">1963720</text>
+    <path d="M1000 204 H1536" stroke="#1F2C3A" stroke-width="1"/>
 
-    <text x="1040" y="370" fill="#627382" font-size="18" letter-spacing="3">STEAMCMD / SYSTEMD / TUI</text>
+    <text x="1000" y="266" font-family="'JetBrains Mono', monospace" font-size="14" fill="#E9A23B">02</text>
+    <text x="1052" y="268" font-size="28" font-weight="600" fill="#E4EDF5">Project Zomboid</text>
+    <text x="1536" y="266" font-family="'JetBrains Mono', monospace" font-size="16" fill="#64778A" text-anchor="end">380870</text>
+    <path d="M1000 282 H1536" stroke="#1F2C3A" stroke-width="1"/>
+
+    <text x="1000" y="344" font-family="'JetBrains Mono', monospace" font-size="14" fill="#E9A23B">03</text>
+    <text x="1052" y="346" font-size="27" font-weight="600" fill="#E4EDF5">Don't Starve Together</text>
+    <text x="1536" y="344" font-family="'JetBrains Mono', monospace" font-size="16" fill="#64778A" text-anchor="end">343050</text>
+    <path d="M1000 360 H1536" stroke="#1F2C3A" stroke-width="1"/>
+  </g>
+
+  <g font-family="'JetBrains Mono', monospace">
+    <text x="1000" y="390" fill="#5C6E80" font-size="14" letter-spacing="2.4">STEAMCMD · SYSTEMD · TUI</text>
+    <text x="64" y="408" fill="#3B4A59" font-size="12" letter-spacing="2">GAMEHOST // DEDICATED SERVER CONTROL PLANE</text>
   </g>
 </svg>
