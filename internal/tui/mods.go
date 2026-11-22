@@ -130,7 +130,7 @@ func (m *mods) add(workshop bool) tea.Cmd {
 	if m.busy {
 		return nil
 	}
-	label, help, key := "Mod id", "the folder name the server loads, for example Hydrocraft", "mod"
+	label, help, key := "Mod id", "the name the server loads, for example Hydrocraft or workshop-1234567890", "mod"
 	if workshop {
 		label = "Workshop item"
 		help = "the numeric id from the Steam Workshop URL"

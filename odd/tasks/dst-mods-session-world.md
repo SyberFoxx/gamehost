@@ -37,8 +37,8 @@ Test-first: each rule gets a failing test before its implementation.
 - T1 | S1 | inline | done in `7c2921b` — DST `ModStore` + tests
 - T2 | S3 | inline | done — session id parser, `SessionID`, `Join` + tests
 - T3 | S2, S4, S5 | inline | done — signal decision, world lifecycle command + tests
-- T4 | S6 | inline | pending — design.md, AGENTS.md, README/CLI help
-- T5 | S1-S6 | inline | pending — gofmt, vet, race suite, push
+- T4 | S6 | inline | done — design.md, AGENTS.md, README/CLI/TUI help
+- T5 | S1-S6 | inline | done — gofmt clean, `go vet ./...` clean, `go test -race ./...` green; pushed
 
 ## Log
 
@@ -66,5 +66,8 @@ Test-first: each rule gets a failing test before its implementation.
   `import-world` rely on their safety archive alone; recreating a map is irreversible in-game, which
   justifies the extra gate. The lobby is not wired to `world`; its Backups screen already calls the
   same restore helper, and docs record the commands as command-only.
+- **L7** (T4): `mods` help no longer says Project Zomboid only — the lobby hint lists PZ and DST and
+  the form explains a numeric mod id as `workshop-<id>`. README gained M21, the DST world commands
+  and the session-id source; design.md gained both command families and the three decisions.
 
 Local locator: odd/tasks/dst-mods-session-world.md

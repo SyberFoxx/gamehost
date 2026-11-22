@@ -49,7 +49,7 @@ var menuLines = []menuLine{
 	{action: actSettings, label: "Settings", hint: "world, players, network, backups"},
 	{action: actFiles, label: "Files", hint: "install or update the server files"},
 	{action: actAdmins, label: "Admins", hint: "who can run admin commands"},
-	{action: actMods, label: "Mods", hint: "workshop items and mod ids (Project Zomboid)"},
+	{action: actMods, label: "Mods", hint: "workshop items and mod ids (PZ, DST)"},
 	{action: actBackups, label: "Backups", hint: "list, restore or import a world"},
 	{action: actService, label: "Systemd", hint: "run it with systemd units"},
 	{header: true, label: "system"},
