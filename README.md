@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="docs/assets/gamehost-banner.png" alt="gamehost — terminal-first manager for dedicated game servers" width="100%">
+  <img src="docs/assets/gamehost-banner-v2.png" alt="gamehost — terminal-first manager for dedicated game servers" width="100%">
 </p>
-
-# gamehost
 
 [![CI](https://github.com/SyberFoxx/gamehost/actions/workflows/ci.yml/badge.svg)](https://github.com/SyberFoxx/gamehost/actions/workflows/ci.yml)
 
