@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"image/color"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,55 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
+
+// The TUI repeats the README palette: white, deep blue and celeste. A style
+// silently drifting back to ANSI defaults would break the shared identity.
+func TestStylesUseTheProfessionalPalette(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		style lipgloss.Style
+		want  color.Color
+	}{
+		{"title", titleStyle, lipgloss.Color("#FFFFFF")},
+		{"accent", accentStyle, lipgloss.Color("#38BDF8")},
+		{"selected", selectedStyle, lipgloss.Color("#7DD3FC")},
+		{"dim", dimStyle, lipgloss.Color("#0369A1")},
+		{"error", errorStyle, lipgloss.Color("#0EA5E9")},
+		{"ok", okStyle, lipgloss.Color("#7DD3FC")},
+		{"warn", warnStyle, lipgloss.Color("#38BDF8")},
+		{"panel border", panelStyle, lipgloss.Color("#0369A1")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var got color.Color
+			if tt.name == "panel border" {
+				got = tt.style.GetBorderTopForeground()
+			} else {
+				got = tt.style.GetForeground()
+			}
+			if got != tt.want {
+				t.Errorf("foreground = %v, want %v", got, tt.want)
+			}
+		})
+	}
+	for _, tt := range []struct {
+		name  string
+		style lipgloss.Style
+	}{
+		{"title", titleStyle},
+		{"selected", selectedStyle},
+		{"error", errorStyle},
+	} {
+		t.Run(tt.name+" is bold", func(t *testing.T) {
+			t.Parallel()
+			if !tt.style.GetBold() {
+				t.Errorf("%s should be bold", tt.name)
+			}
+		})
+	}
+}
 
 func TestWordmarkIsSixEvenRows(t *testing.T) {
 	t.Parallel()

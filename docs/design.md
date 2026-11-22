@@ -763,3 +763,8 @@ Each milestone is one work unit: code, tests and doc updates in the same commit.
   rollback` is a named entry point to the archive path gamehost already verifies: stopped only,
   safety archive first, path-traversal-safe extractor. The `world` commands are command-only for now;
   the lobby's backup screen already reaches the same restore helper.
+- **One palette across the README and the TUI.** The banner and badges use white, sky and deep blue
+  (`#FFFFFF`, `#7DD3FC`, `#38BDF8`, `#0EA5E9`, `#0369A1`), so the lobby styles those exact values
+  instead of terminal defaults. Status verdicts stay inside the same scale: weight and the ✓/!✗
+  markers distinguish ok, warn and error, which keeps the identity without a second hue competing
+  with it. `TestStylesUseTheProfessionalPalette` pins the mapping.

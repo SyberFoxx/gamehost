@@ -267,3 +267,7 @@ Candidates, easiest first:
   helper corrupts the frame); report through the model note or the error footer.
 - Terminal detection uses `charmbracelet/x/term`, not `os.ModeCharDevice`: `/dev/null` is a
   character device too, and pointing the lobby at it hides the UI.
+- The TUI repeats the README palette from `internal/tui/view.go`: white titles, `#38BDF8` accent,
+  `#7DD3FC` selected/success, `#0EA5E9` bold errors, `#0369A1` dim text and panel borders. Keep
+  status meaning in the ✓/!✗ markers and weight, not in a separate red or amber hue, and update
+  `TestStylesUseTheProfessionalPalette` when the palette changes.
