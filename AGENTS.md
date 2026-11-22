@@ -211,6 +211,15 @@ Candidates, easiest first:
   `Join` shows it as `session id`; before the first start it falls back to the `cluster_name`. Never
   invent or cache this value in `instance.json`: the server writes a new one on every start, and
   `state.GameID` is written from the log on a clean stop like every other game.
+- DST keeps the signal stop: a real `SIGTERM` exited 0, the wiki's Linux service example uses `kill`,
+  and `-console` cannot reach the Caves shard, which has no stdin. Do not add a Lua console stop.
+- `world recreate <name> --yes` is DST-only through the optional `game.WorldResetter` interface. It
+  refuses a running instance, writes a `pre-recreate_` safety archive and removes only
+  `<cluster>/Master/save/` plus `Caves/save/` when Caves runs. Never delete the ini, token, admin
+  list or logs: they are not generated world data. `--yes` is the confirmation; without it the
+  command must not touch anything. `world rollback <name> <archive>` is a named entry point to the
+  existing `restore` helper, not a wrapper for the undocumented `c_rollback` snapshot layout. Both
+  are command-only; the lobby reaches the same restore path from the Backups screen.
 - The Caves shard is a second process with `-shard Caves` and the next UDP port. Both shards share
   the Master's process group, so `state.json` keeps one pid and one stop signal reaches both; a
   shard that dies unasked stops the instance instead of leaving dead portals behind.

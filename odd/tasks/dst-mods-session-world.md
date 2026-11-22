@@ -36,7 +36,7 @@ Test-first: each rule gets a failing test before its implementation.
 
 - T1 | S1 | inline | done in `7c2921b` — DST `ModStore` + tests
 - T2 | S3 | inline | done — session id parser, `SessionID`, `Join` + tests
-- T3 | S2, S4, S5 | inline | pending — signal decision, world lifecycle command + tests
+- T3 | S2, S4, S5 | inline | done — signal decision, world lifecycle command + tests
 - T4 | S6 | inline | pending — design.md, AGENTS.md, README/CLI help
 - T5 | S1-S6 | inline | pending — gofmt, vet, race suite, push
 
@@ -61,5 +61,10 @@ Test-first: each rule gets a failing test before its implementation.
   DST now returns `("session id", <hex>)` once the log has one and `("cluster", <name>)` before the
   first start. The cluster name remains in `instance.json`; the session id stays only in the log and
   the runtime state, never in config.
+- **L6** (T3 confirmation): the CLI has no stdin channel and no existing prompt helper, so
+  `world recreate` requires an explicit `--yes` instead of asking interactively. `restore` and
+  `import-world` rely on their safety archive alone; recreating a map is irreversible in-game, which
+  justifies the extra gate. The lobby is not wired to `world`; its Backups screen already calls the
+  same restore helper, and docs record the commands as command-only.
 
 Local locator: odd/tasks/dst-mods-session-world.md
