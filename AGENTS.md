@@ -113,8 +113,13 @@ Candidates, easiest first:
   the top of `Server/<name>.ini`. `mods list` works while running; add and remove need a stopped
   server. The ini only exists after the first start, and a missing file is a clear error.
 - `game.AdminStore` and `game.ModStore` are optional driver interfaces; the CLI and the lobby assert
-  them instead of branching on the game name. Project Zomboid has no admin list yet, and only
-  Project Zomboid has a mod list.
+  them instead of branching on the game name. Project Zomboid has no admin list yet. Project Zomboid
+  and Don't Starve Together have a mod list.
+- DST mods are two files: `<install>/mods/dedicated_server_mods_setup.lua` installs Workshop ids with
+  `ServerModSetup("<id>")`, and `<cluster>/<shard>/modoverrides.lua` enables `workshop-<id>` per
+  shard. gamehost rewrites only its own lines there; `ServerModCollectionSetup`, manual mod folders
+  and a mod's `configuration_options` are the player's and must survive a mod command. A numeric mod
+  name means `workshop-<id>`; installing that id and enabling the name is one operation.
 - `serve` binds `127.0.0.1:8080` and has no authentication; keep it on loopback and let a reverse
   proxy own access control.
 - The restore extractor rejects any tar entry that is not local to the target directory; keep that
