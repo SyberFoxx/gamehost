@@ -24,6 +24,10 @@ Feature branch `feat/pz-console`, delivery `single-pr`, runner `go test -race ./
   reorder `Mods=`, because map mods load top-down.
 - **S8** — Every launch flag, path, state change and command in these specs updates `docs/design.md`
   and the `AGENTS.md` traps in the same commit.
+- **S9** — (deferred, awaiting live test) Map and world lifecycle: an operator can inspect the map a
+  world uses and recreate the world, with an explicit confirmation and a backup first, because
+  recreating destroys the existing save. Assumption, not yet requested: this belongs in the PZ
+  driver and must reuse the existing backup path rather than deleting files directly.
 
 ## Tasks
 
@@ -35,8 +39,9 @@ Feature branch `feat/pz-console`, delivery `single-pr`, runner `go test -race ./
 | T4 | S2 | inline | done — `stopInstance` console path |
 | T5 | S8 | inline | done — design.md, AGENTS.md, README, M19 |
 | T6 | S4 | inline | done — `MaxPlayers=` and `Password=` in the ini (`internal/projectzomboid/launcher.go`) |
-| T7 | S5 | inline | pending — `game.AdminStore` through the console |
-| T8 | S6, S7 | inline | pending — workshop id resolution and mod order |
+| T7 | S5 | inline | paused — awaiting the user's live test; console flow chosen, DB schema unverified |
+| T8 | S6, S7 | inline | paused — awaiting the user's live test; workshop id resolution and mod order |
+| T9 | S9 | inline | deferred — map and world recreation with backup and confirmation |
 
 ## Log
 
@@ -66,3 +71,17 @@ Feature branch `feat/pz-console`, delivery `single-pr`, runner `go test -race ./
   form submitted hidden fields, which would have leaked that default — `form.submitted()` now drops
   them. Verified with `gofmt`, `go vet`, `go test -race ./...` and a manual `create`/`show`/
   `config` run.
+- **L7** (user, verbatim): "dejemoslo por ahora asi, cuando yo vaya a probarlo te dire que arreglamos,
+  lo que quiero es que tengas ne cuenta los mapas, si se recrea le mundo y esas cosas que usarias
+  alguien en un server de pz, asi como mods, agregar eliminar mods y asi, y todo lo importante pues"
+- **L8** (decision): Admin work is paused until the user tests a live server. The chosen design stays
+  recorded for later: console add/remove with a running server, username as identity, a PZ-only
+  `--password`, `limited` mapped to `moderator`, and `admin list` reading the DB read-only. Blocker:
+  the wiki documents no DB schema and no local PZ database exists to inspect; do not guess columns.
+- **L9** (scope notes, assumptions only — NOT requested work): the user asked to keep maps, world
+  recreation, mods and "everything important" in mind. Already covered today: `Mods=` and
+  `WorkshopItems=` add/remove in `internal/projectzomboid/mods.go` and the lobby Mods screen (M16,
+  `odd/tasks/projectzomboid-mods.md`), plus clean `save`/`quit` shutdown (M19) and backups. Open
+  candidates to confirm with the user, not commitments: changing the `Map=` key, recreating a world
+  after a backup, ban/kick/whitelist operations, RCON, log inspection and server messages. None of
+  these are authorized; they are recorded so the next session does not forget the surface.
