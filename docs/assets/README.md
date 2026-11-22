@@ -2,11 +2,14 @@
 
 Images referenced by the root `README.md`.
 
-| File | Purpose | Suggested size |
+| File | Purpose | Source |
 | --- | --- | --- |
-| `banner.png` | header image | 1600×400, transparent or dark background |
-| `screenshot-status.png` | `gamehost status` in a terminal | 1440 wide |
-| `screenshot-list.png` | `gamehost list` | 1440 wide |
+| `gamehost-banner.svg` | header artwork and logotype | hand-authored vector, edit this first |
+| `gamehost-banner-v3.png` | rendered header image | `rsvg-convert -w 1600 -h 440 gamehost-banner.svg -o gamehost-banner-v3.png` |
 
-The README contains commented placeholders; uncomment the block and drop the file with the matching
-name here.
+The root README renders `gamehost-banner-v3.png`. When the artwork changes, render it to a new
+versioned filename and update the `src` in `README.md`: GitHub caches images by URL, so reusing the
+same filename leaves viewers with the previous version.
+
+The screenshots mentioned in older revisions (`screenshot-status.png`, `screenshot-list.png`) are
+not committed yet. Their placeholders remain in the root README.

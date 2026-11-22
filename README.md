@@ -1,12 +1,21 @@
 <p align="center">
-  <img src="docs/assets/gamehost-banner-v2.png" alt="gamehost — terminal-first manager for dedicated game servers" width="100%">
+  <img src="docs/assets/gamehost-banner-v3.png" alt="gamehost — one control plane for every dedicated server" width="100%">
+</p>
+
+<h1 align="center">gamehost</h1>
+
+<p align="center">
+  <strong>One control plane for every dedicated server.</strong><br>
+  Terminal-first · driver-based · built to grow
 </p>
 
 [![CI](https://github.com/SyberFoxx/gamehost/actions/workflows/ci.yml/badge.svg)](https://github.com/SyberFoxx/gamehost/actions/workflows/ci.yml)
 
-Terminal-first manager for dedicated game servers, written in Go. Supported games are
-**Core Keeper**, **Project Zomboid** and **Don't Starve Together**: install, configure, run,
-inspect and back up a server for a small friend group.
+gamehost installs, configures, supervises and backs up dedicated game servers from one place.
+Games are small drivers behind a shared contract, so the manager does not care which one it runs:
+**Core Keeper**, **Project Zomboid** and **Don't Starve Together** ship today, and adding another
+is one package. A single instance can be a whole cluster, both shards and their scheduled backup
+window.
 
 The project is also a structured Go learning path. Every milestone adds one real capability and the
 language features it requires: `os/exec`, process groups, signals, atomic writes, `net/http`,
@@ -62,8 +71,8 @@ concurrency and tests with `-race`.
   previous data as a pre-restore backup.
 - Serves a small web panel and a JSON API with live status, start/stop controls and an SSE log
   stream, embedding the page in the binary.
-- Runs three games behind one driver interface: Core Keeper, Project Zomboid and Don't Starve
-  Together (online with a Klei token, or LAN-only offline).
+- Runs any number of games behind one driver contract: Core Keeper, Project Zomboid and Don't Starve
+  Together ship today, and each new game is a package rather than a branch in the CLI.
 - Runs the Don't Starve Together surface world and its Caves shard as one instance: one start, one
   stop and one backup cover both processes.
 - Imports an existing `.world.gzip` save into an instance, archiving the current world first.

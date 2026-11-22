@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="440" viewBox="0 0 1600 440" role="img" aria-labelledby="title desc">
   <title id="title">gamehost</title>
-  <desc id="desc">Terminal-first manager for Core Keeper, Project Zomboid and Don't Starve Together dedicated servers.</desc>
+  <desc id="desc">One control plane for every dedicated server. Install, configure, run, inspect and back up game servers from the terminal, the lobby or the panel.</desc>
 
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
@@ -32,28 +32,28 @@
 
   <!-- masthead -->
   <g font-family="'JetBrains Mono', monospace">
-    <text x="64" y="58" fill="#5C6E80" font-size="14" letter-spacing="3.2">GAMEHOST / INFRASTRUCTURE</text>
-    <text x="1536" y="58" fill="#5C6E80" font-size="14" letter-spacing="2" text-anchor="end">v1.0 — LINUX</text>
+    <text x="64" y="58" fill="#5C6E80" font-size="14" letter-spacing="3.2">GAMEHOST / SERVER CONTROL PLANE</text>
+    <text x="1536" y="58" fill="#5C6E80" font-size="14" letter-spacing="2" text-anchor="end">WRITTEN IN GO — BUILT TO EXTEND</text>
   </g>
   <path d="M64 74 H1536" stroke="#1F2C3A" stroke-width="1"/>
 
   <!-- logotype -->
   <g>
-    <rect x="64" y="126" width="70" height="70" rx="9" fill="#121C26" stroke="#E9A23B" stroke-width="1.5"/>
-    <path d="M83 150 L95 161 L83 172" fill="none" stroke="#E9A23B" stroke-width="3" stroke-linecap="square" stroke-linejoin="miter"/>
-    <path d="M99 172 H114" stroke="#E9A23B" stroke-width="3" stroke-linecap="square"/>
-    <text x="152" y="194" font-family="Inter, 'Inter Display', sans-serif" font-size="118" font-weight="900" letter-spacing="-6">
+    <rect x="64" y="126" width="72" height="72" rx="9" fill="#121C26" stroke="#E9A23B" stroke-width="1.5"/>
+    <path d="M84 150 L97 162 L84 174" fill="none" stroke="#E9A23B" stroke-width="3" stroke-linecap="square" stroke-linejoin="miter"/>
+    <path d="M101 174 H117" stroke="#E9A23B" stroke-width="3" stroke-linecap="square"/>
+    <text x="152" y="196" font-family="Inter, 'Inter Display', sans-serif" font-size="122" font-weight="900" letter-spacing="-6">
       <tspan fill="url(#word)">game</tspan><tspan fill="#E9A23B">host</tspan>
     </text>
-    <rect x="152" y="214" width="524" height="3" fill="#1F2C3A"/>
-    <rect x="152" y="214" width="112" height="3" fill="#E9A23B"/>
+    <rect x="152" y="216" width="530" height="3" fill="#1F2C3A"/>
+    <rect x="152" y="216" width="112" height="3" fill="#E9A23B"/>
   </g>
 
   <!-- position line -->
   <g font-family="'JetBrains Mono', monospace">
-    <text x="64" y="278" fill="#A9B7C4" font-size="17" letter-spacing="3.4">DEDICATED SERVER ORCHESTRATION</text>
+    <text x="64" y="278" fill="#A9B7C4" font-size="17" letter-spacing="3.4">ONE CONTROL PLANE / MANY DEDICATED SERVERS</text>
   </g>
-  <text x="64" y="313" font-family="Inter, sans-serif" font-size="23" font-weight="400" fill="#64778A">install <tspan fill="#3B4A59">/</tspan> configure <tspan fill="#3B4A59">/</tspan> run <tspan fill="#3B4A59">/</tspan> inspect <tspan fill="#3B4A59">/</tspan> back up</text>
+  <text x="64" y="313" font-family="Inter, sans-serif" font-size="23" font-weight="400" fill="#64778A">install <tspan fill="#3B4A59">/</tspan> configure <tspan fill="#3B4A59">/</tspan> run <tspan fill="#3B4A59">/</tspan> inspect <tspan fill="#3B4A59">/</tspan> back up <tspan fill="#3B4A59">/</tspan> extend</text>
 
   <!-- terminal cue -->
   <rect x="64" y="344" width="192" height="36" rx="5" fill="#121C26" stroke="#1F2C3A" stroke-width="1"/>
@@ -64,31 +64,37 @@
   <path d="M952 104 V372" stroke="#1F2C3A" stroke-width="1"/>
   <path d="M952 232 L960 240 L952 248 L944 240 Z" fill="#E9A23B"/>
 
-  <!-- engines -->
+  <!-- architecture: extensible, not a fixed game list -->
   <g font-family="'JetBrains Mono', monospace">
-    <text x="1000" y="120" fill="#5C6E80" font-size="14" letter-spacing="3.2">SUPPORTED ENGINES</text>
+    <text x="1000" y="120" fill="#5C6E80" font-size="14" letter-spacing="3.2">BUILT TO EXTEND</text>
   </g>
   <path d="M1000 136 H1536" stroke="#1F2C3A" stroke-width="1"/>
 
-  <g font-family="Inter, sans-serif">
-    <text x="1000" y="188" font-family="'JetBrains Mono', monospace" font-size="14" fill="#E9A23B">01</text>
-    <text x="1052" y="190" font-size="28" font-weight="600" fill="#E4EDF5">Core Keeper</text>
-    <text x="1536" y="188" font-family="'JetBrains Mono', monospace" font-size="16" fill="#64778A" text-anchor="end">1963720</text>
-    <path d="M1000 204 H1536" stroke="#1F2C3A" stroke-width="1"/>
+  <g font-family="'JetBrains Mono', monospace">
+    <text x="1000" y="180" font-size="14" fill="#E9A23B">01</text>
+    <text x="1052" y="180" font-size="22" fill="#E4EDF5" letter-spacing="1">STEAMCMD</text>
+    <text x="1536" y="180" font-size="15" fill="#64778A" text-anchor="end">anonymous installs</text>
+    <path d="M1000 194 H1536" stroke="#1F2C3A" stroke-width="1"/>
 
-    <text x="1000" y="266" font-family="'JetBrains Mono', monospace" font-size="14" fill="#E9A23B">02</text>
-    <text x="1052" y="268" font-size="28" font-weight="600" fill="#E4EDF5">Project Zomboid</text>
-    <text x="1536" y="266" font-family="'JetBrains Mono', monospace" font-size="16" fill="#64778A" text-anchor="end">380870</text>
-    <path d="M1000 282 H1536" stroke="#1F2C3A" stroke-width="1"/>
+    <text x="1000" y="236" font-size="14" fill="#E9A23B">02</text>
+    <text x="1052" y="236" font-size="22" fill="#E4EDF5" letter-spacing="1">PROCESS</text>
+    <text x="1536" y="236" font-size="15" fill="#64778A" text-anchor="end">supervised lifecycle</text>
+    <path d="M1000 250 H1536" stroke="#1F2C3A" stroke-width="1"/>
 
-    <text x="1000" y="344" font-family="'JetBrains Mono', monospace" font-size="14" fill="#E9A23B">03</text>
-    <text x="1052" y="346" font-size="27" font-weight="600" fill="#E4EDF5">Don't Starve Together</text>
-    <text x="1536" y="344" font-family="'JetBrains Mono', monospace" font-size="16" fill="#64778A" text-anchor="end">343050</text>
-    <path d="M1000 360 H1536" stroke="#1F2C3A" stroke-width="1"/>
+    <text x="1000" y="292" font-size="14" fill="#E9A23B">03</text>
+    <text x="1052" y="292" font-size="22" fill="#E4EDF5" letter-spacing="1">BACKUP</text>
+    <text x="1536" y="292" font-size="15" fill="#64778A" text-anchor="end">scheduled windows</text>
+    <path d="M1000 306 H1536" stroke="#1F2C3A" stroke-width="1"/>
+
+    <text x="1000" y="348" font-size="18" fill="#E9A23B">+</text>
+    <text x="1052" y="348" font-size="22" fill="#E9A23B" letter-spacing="1">YOUR GAME</text>
+    <text x="1536" y="348" font-size="15" fill="#64778A" text-anchor="end">one driver package</text>
+    <path d="M1000 362 H1536" stroke="#1F2C3A" stroke-width="1"/>
   </g>
 
+  <!-- footer -->
   <g font-family="'JetBrains Mono', monospace">
-    <text x="1000" y="390" fill="#5C6E80" font-size="14" letter-spacing="2.4">STEAMCMD · SYSTEMD · TUI</text>
-    <text x="64" y="408" fill="#3B4A59" font-size="12" letter-spacing="2">GAMEHOST // DEDICATED SERVER CONTROL PLANE</text>
+    <text x="1000" y="390" fill="#5C6E80" font-size="14" letter-spacing="2.4">STEAMCMD · SYSTEMD · TUI · API</text>
+    <text x="64" y="408" fill="#3B4A59" font-size="12" letter-spacing="2">GAMEHOST // ONE CONTROL PLANE FOR EVERY DEDICATED SERVER</text>
   </g>
 </svg>
