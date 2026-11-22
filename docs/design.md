@@ -172,6 +172,7 @@ checked against a real install (build `762172`) on this machine.
 | Shard | `-shard Master`; a single shard needs no `cluster_key` and no Caves shard |
 | Files | `<root>/<conf_dir>/<cluster>/cluster.ini`, `cluster_token.txt`, `adminlist.txt`; `<cluster>/Master/server.ini` |
 | World data | `<cluster>/Master/save/`, plus `server_log.txt` and `backup/` next to it |
+| Session id | the Master prints `Telling Client our new session identifier: <hex>` in `<cluster>/Master/server_log.txt`; a new one per start, so gamehost reads the last matching line and shows it as `session id`, falling back to `cluster` before the first start |
 | Caves | a second process with `-shard Caves`, `<cluster>/Caves/server.ini`, `[SHARD]` in `cluster.ini` and internal port `10888` |
 | Admin list | one Klei user id (`KU_...`) per line in `<cluster>/adminlist.txt`; the server reads it at startup |
 | Mod install | `<install>/mods/dedicated_server_mods_setup.lua`: one `ServerModSetup("<id>")` per Workshop id; `ServerModCollectionSetup` and manual mods stay for the player to edit |

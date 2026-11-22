@@ -34,8 +34,8 @@ Test-first: each rule gets a failing test before its implementation.
 
 ## Tasks
 
-- T1 | S1 | inline | pending — DST `ModStore` + tests
-- T2 | S3 | inline | pending — session id parser, `SessionID`, `Join` + tests
+- T1 | S1 | inline | done in `7c2921b` — DST `ModStore` + tests
+- T2 | S3 | inline | done — session id parser, `SessionID`, `Join` + tests
 - T3 | S2, S4, S5 | inline | pending — signal decision, world lifecycle command + tests
 - T4 | S6 | inline | pending — design.md, AGENTS.md, README/CLI help
 - T5 | S1-S6 | inline | pending — gofmt, vet, race suite, push
@@ -56,5 +56,10 @@ Test-first: each rule gets a failing test before its implementation.
   Adding a Lua console channel would risk its stdin plumbing and leave Caves unsaved.
 - **L4** (scope): `ServerModCollectionSetup` and manual non-Workshop mods remain editable by hand;
   the CLI manages one Workshop id at a time, matching the existing `mods add|remove` shape.
+- **L5** (T2 presentation decision): the status, lobby and HTTP readers prefer `Join()` over
+  `state.GameID`, so returning the cluster name from `Join()` forever would hide the session id.
+  DST now returns `("session id", <hex>)` once the log has one and `("cluster", <name>)` before the
+  first start. The cluster name remains in `instance.json`; the session id stays only in the log and
+  the runtime state, never in config.
 
 Local locator: odd/tasks/dst-mods-session-world.md

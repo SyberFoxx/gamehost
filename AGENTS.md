@@ -206,8 +206,11 @@ Candidates, easiest first:
   never rewrite that file, and never treat the appended line as drift.
 - The DST binary needs `libcurl-gnutls.so.4`, which Fedora and Nobara do not package; the server
   exits 127 with `error while loading shared libraries` until it is on the loader path.
-- DST has no game ID: the cluster is found in the server browser by its `cluster_name`, or by
-  address and UDP port.
+- DST has no join code, but the Master prints `Telling Client our new session identifier: <hex>` in
+  `<cluster>/Master/server_log.txt` once the world starts. `SessionID` reads the last such line and
+  `Join` shows it as `session id`; before the first start it falls back to the `cluster_name`. Never
+  invent or cache this value in `instance.json`: the server writes a new one on every start, and
+  `state.GameID` is written from the log on a clean stop like every other game.
 - The Caves shard is a second process with `-shard Caves` and the next UDP port. Both shards share
   the Master's process group, so `state.json` keeps one pid and one stop signal reaches both; a
   shard that dies unasked stops the instance instead of leaving dead portals behind.
