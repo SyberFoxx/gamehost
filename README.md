@@ -6,7 +6,15 @@
   <img src="docs/assets/gamehost-title.png" alt="gamehost — one control plane for every dedicated server" width="640">
 </p>
 
-[![CI](https://github.com/SyberFoxx/gamehost/actions/workflows/ci.yml/badge.svg)](https://github.com/SyberFoxx/gamehost/actions/workflows/ci.yml)
+<p align="center">
+  <a href="https://github.com/SyberFoxx/gamehost/actions/workflows/ci.yml"><img src="https://github.com/SyberFoxx/gamehost/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/SyberFoxx/gamehost/releases"><img src="https://img.shields.io/github/v/release/SyberFoxx/gamehost?color=0EA5E9&amp;logo=github&amp;logoColor=white" alt="Release"></a>
+  <img src="https://img.shields.io/github/languages/top/SyberFoxx/gamehost?color=00ADD8&amp;logo=go&amp;logoColor=white" alt="Language: Go">
+  <img src="https://img.shields.io/badge/Go-1.26%2E10-0284C7?logo=go&amp;logoColor=white" alt="Go version">
+  <img src="https://img.shields.io/badge/Interface-CLI%20%2B%20TUI-38BDF8?logo=gnometerminal&amp;logoColor=0B1016" alt="Interface: CLI and TUI">
+  <img src="https://img.shields.io/badge/Platform-Linux-102030?logo=linux&amp;logoColor=7DD3FC" alt="Platform: Linux">
+  <img src="https://img.shields.io/badge/License-MIT-0369A1" alt="License: MIT">
+</p>
 
 gamehost installs, configures, supervises and backs up dedicated game servers from one place.
 Games are small drivers behind a shared contract, so the manager does not care which one it runs:
