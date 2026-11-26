@@ -72,6 +72,12 @@ type ModStore interface {
 	SaveMods(inst instance.Instance, mods Mods) error
 }
 
+// WorldResetter can discard a game's generated world data so the next start
+// creates a new world from the generation settings the player already owns.
+type WorldResetter interface {
+	ResetWorld(inst instance.Instance) error
+}
+
 // Console is a server that reads commands from its standard input, which
 // gamehost feeds from a control file. Project Zomboid takes its admin commands
 // that way and asks to be stopped with `save` and `quit` instead of a signal.

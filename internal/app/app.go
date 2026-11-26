@@ -63,6 +63,7 @@ commands:
   stop      stop a running server
   status    report the last known state of an instance
   update    re-download the server files of an instance
+  world     recreate or roll back the world of an instance (dontstarvetogether)
   doctor    check the environment
   version   print the gamehost version
 
@@ -85,6 +86,10 @@ mods subcommands:
   mods list <name>
   mods add <name> <id> [--workshop]
   mods remove <name> <id> [--workshop]
+
+world subcommands:
+  world recreate <name> --yes   delete the generated world; next start makes a new one
+  world rollback <name> <archive>   restore a gamehost backup of the data
 
 config flags:
   --max-players N, --world-name NAME, --mode NAME, --port N, --password PW, --game-id ID
@@ -131,6 +136,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runConfig(args[1:], stdout, stderr)
 	case "mods":
 		return runMods(args[1:], stdout, stderr)
+	case "world":
+		return runWorld(args[1:], stdout, stderr)
 	case "admin":
 		return runAdmin(args[1:], stdout, stderr)
 	case "start":

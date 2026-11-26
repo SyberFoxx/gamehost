@@ -53,11 +53,12 @@ concurrency and tests with `-race`.
 | M13 | lobby as the whole program: instances, files, backups, admins, systemd, panel | done |
 | M14 | Don't Starve Together driver: online and offline clusters, cluster files, token | done |
 | M15 | Caves shard for DST, Klei admins from the terminal and the lobby | done |
-| M16 | Project Zomboid mods: workshop items and mod ids from the CLI and the lobby | done |
+| M16 | Mods for Project Zomboid and Don't Starve Together from the CLI and the lobby | done |
 | M17 | Project Zomboid memory: `--memory` and the lobby field rewrite only the JVM heap | done |
 | M18 | supervisor-owned backup schedule and live settings from the lobby | done |
 | M19 | Project Zomboid console: a controlled `save`/`quit` stop instead of a signal | done |
 | M20 | Project Zomboid player limit and join password from `--max-players` and `--password` | done |
+| M21 | DST mods, a real world session id and `world recreate` / `world rollback` | done |
 
 ## Features
 
@@ -80,6 +81,8 @@ concurrency and tests with `-race`.
   Together ship today, and each new game is a package rather than a branch in the CLI.
 - Runs the Don't Starve Together surface world and its Caves shard as one instance: one start, one
   stop and one backup cover both processes.
+- Manages Workshop mods for both Project Zomboid and Don't Starve Together, reports DST's real world
+  session id, and recreates or rolls back a DST world with a safety archive first.
 - Imports an existing `.world.gzip` save into an instance, archiving the current world first.
 - Holds a per-instance lock, so two servers or a backup and a start can never share one world.
 - Keeps the newest ten run logs and prunes the rest.
@@ -243,7 +246,7 @@ usable.
 | Logs | newest tail, then follows live; `G` returns to the live edge and `n` reloads with another tail size | `logs -f`, `logs -n` |
 | Backups | `b` archives after asking the retention, `Enter` restores, `i` imports a `.world.gzip` | `backup --keep`, `restore`, `import-world` |
 | Admins | `a` adds, `d` removes, both only while stopped | `admin add`, `admin remove` |
-| Mods | Project Zomboid only: `a` adds a mod id, `w` a workshop item, `d` removes | `mods add`, `mods remove` |
+| Mods | Project Zomboid and Don't Starve Together: `a` adds a mod id, `w` a workshop item, `d` removes | `mods add`, `mods remove` |
 | Systemd | `i` writes the units, `e` also enables them, `u` removes them, `a` edits `--dir`, `--binary` and `--systemctl` | `service install`, `service uninstall` |
 | Environment | every `doctor` check with its status, the build version and a verdict | `doctor`, `version` |
 | Web panel | starts the panel on `127.0.0.1:8080` with the backup schedule, `b` picks an instance to start with it, `Esc` stops it | `serve`, `serve --start` |
@@ -292,7 +295,9 @@ game id   K85KQswu7GWLsQB
 ```
 
 `status` reads the session id the server writes to `GameInfo.txt` next to its binary, so friends can
-join with it. `start` records it in `state.json` when the run ends.
+join with it. `start` records it in `state.json` when the run ends. Don't Starve Together prints its
+session identifier in `<cluster>/Master/server_log.txt` instead; `status` shows it as `session id`,
+or the `cluster_name` before the first start.
 
 `config` prints the settings with no flags and changes them with flags:
 
@@ -369,7 +374,8 @@ A Steam ID64 is the 17-digit number that starts with `7656119`. `full` (privileg
 every admin command; `--limited` stores privileges `1`, the level the game marks as limited.
 `admin list` works while the server runs; `add` and `remove` refuse until it is stopped.
 
-Project Zomboid loads mods from its ini. Manage the two lists without editing the file:
+Both Project Zomboid and Don't Starve Together load mods from files the server owns. Manage the
+lists without editing those files:
 
 ```bash
 gamehost stop zomboid
@@ -380,9 +386,16 @@ gamehost mods remove zomboid Hydrocraft
 gamehost start zomboid --detach
 ```
 
-`mods add` and `mods remove` rewrite only the `WorkshopItems=` and `Mods=` lines and leave the rest
-of the ini byte for byte; `mods list` works while the server runs. The lobby has the same screen
-under `Mods`.
+`mods list` works while the server runs; `add` and `remove` need it stopped. The lobby has the same
+screen under `Mods`. Each driver edits only its own lines:
+
+- Project Zomboid rewrites `WorkshopItems=` and `Mods=` in `data/Server/<name>.ini` and leaves every
+  other byte alone.
+- Don't Starve Together writes `ServerModSetup("<id>")` to
+  `<install>/mods/dedicated_server_mods_setup.lua` and enables `["workshop-<id>"]` in every shard's
+  `modoverrides.lua`. A bare numeric mod id means `workshop-<id>`, so `mods add dst 12345` installs
+  and enables it in one step. `ServerModCollectionSetup`, manual mod folders and a mod's
+  `configuration_options` stay yours.
 
 Don't Starve Together uses the same commands with the Klei user id that the game shows (`KU_...`).
 The driver writes one id per line to `data/gamehost/<name>/adminlist.txt`; names and limited
@@ -484,9 +497,28 @@ max players and the join password stay in `data/Server/base.ini`.
 
 Don't Starve Together uses the same commands; `--offline` runs a LAN cluster without a Klei token,
 while an online cluster takes `--cluster-token`. `status` reports the `cluster_name` players see in
-the server browser, and gamehost writes `cluster.ini`/`Master/server.ini` under
-`data/gamehost/<name>/` the first time. Add `--caves` to run the underground shard too: it uses the
-next UDP port and is stopped together with the surface world.
+the server browser until the world starts, then the session identifier from `server_log.txt`.
+gamehost writes `cluster.ini`/`Master/server.ini` under `data/gamehost/<name>/` the first time. Add
+`--caves` to run the underground shard too: it uses the next UDP port and is stopped together with
+the surface world. DST keeps the signal stop: a verified `SIGTERM` saves and exits cleanly, and the
+console channel could not reach the Caves shard.
+
+A world can be regenerated or rolled back from a gamehost archive:
+
+```bash
+gamehost stop cave
+gamehost world recreate cave --yes   # delete Master/save/ (and Caves/save/), next start makes a new map
+gamehost backup cave                 # or keep the current one first
+gamehost world rollback cave 2026-11-22_10-00-00.tar.gz
+gamehost start cave --detach
+```
+
+`world recreate` refuses a running server, writes a `pre-recreate_` archive and removes only the
+generated save folders; the ini, token, admin list and logs stay. The explicit `--yes` is the
+confirmation, because a regenerated map cannot be undone in game. `world rollback` is the named path
+to the same `restore` helper: DST's internal snapshot layout is not documented, so gamehost never
+claims to call `c_rollback`. Both commands are terminal-only; the lobby's Backups screen reaches the
+same restore helper.
 
 ## Verifying a real Core Keeper server
 
@@ -543,9 +575,11 @@ a command would have failed the check.
 | `gamehost admin list <name>` | print the admin list of the game |
 | `gamehost admin add <name> <id> [--name NAME] [--limited]` | grant admin rights; Steam ID or `KU_...` id (stopped only) |
 | `gamehost admin remove <name> <id>` | drop admin rights (stopped only) |
-| `gamehost mods list <name>` | print the workshop items and mod ids (Project Zomboid) |
+| `gamehost mods list <name>` | print the workshop items and mod ids (Project Zomboid, DST) |
 | `gamehost mods add <name> <id> [--workshop]` | add a mod id or workshop item (stopped only) |
 | `gamehost mods remove <name> <id> [--workshop]` | drop a mod id or workshop item (stopped only) |
+| `gamehost world recreate <name> --yes` | delete the generated world saves, after a `pre-recreate_` archive (DST only, stopped only) |
+| `gamehost world rollback <name> <archive>` | restore a gamehost backup; named entry point to `restore` (stopped only) |
 | `gamehost serve [--addr]` | serve the HTTP API and web panel (default `127.0.0.1:8080`) |
 | `gamehost serve --start <name>` | start that instance when the daemon boots; repeatable |
 | `gamehost service install <name> [--enable]` | write the systemd user units, optionally enabling and starting them |

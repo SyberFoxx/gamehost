@@ -8,17 +8,28 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// The TUI uses the same white, deep blue and celeste as the README badges and
+// banner. Semantic states stay inside that palette: weight and the ✓/!✗ marks
+// carry the meaning instead of a separate red or amber hue.
+const (
+	paletteWhite    = "#FFFFFF"
+	paletteCeleste  = "#38BDF8"
+	paletteSkyLight = "#7DD3FC"
+	paletteSky      = "#0EA5E9"
+	paletteBlue     = "#0369A1"
+)
+
 var (
-	titleStyle    = lipgloss.NewStyle().Bold(true)
-	accentStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
-	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	okStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(paletteWhite))
+	accentStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(paletteCeleste))
+	selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(paletteSkyLight))
+	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color(paletteBlue))
+	errorStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(paletteSky))
+	okStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color(paletteSkyLight))
+	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(paletteCeleste))
 	panelStyle    = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("240")).
+			BorderForeground(lipgloss.Color(paletteBlue)).
 			Padding(0, 1)
 )
 

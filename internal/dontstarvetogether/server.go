@@ -268,11 +268,3 @@ func (Runner) Launch(inst instance.Instance) (game.Launch, error) {
 
 // Prepare writes the cluster files the server reads at startup.
 func (Runner) Prepare(inst instance.Instance) error { return Prepare(inst) }
-
-// SessionID is empty: Don't Starve Together has no join code.
-func (Runner) SessionID(instance.Instance) string { return "" }
-
-// Join reports the name the cluster shows in the server browser.
-func (Runner) Join(inst instance.Instance) (string, string) {
-	return "cluster", inst.World.Name
-}

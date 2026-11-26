@@ -113,8 +113,13 @@ Candidates, easiest first:
   the top of `Server/<name>.ini`. `mods list` works while running; add and remove need a stopped
   server. The ini only exists after the first start, and a missing file is a clear error.
 - `game.AdminStore` and `game.ModStore` are optional driver interfaces; the CLI and the lobby assert
-  them instead of branching on the game name. Project Zomboid has no admin list yet, and only
-  Project Zomboid has a mod list.
+  them instead of branching on the game name. Project Zomboid has no admin list yet. Project Zomboid
+  and Don't Starve Together have a mod list.
+- DST mods are two files: `<install>/mods/dedicated_server_mods_setup.lua` installs Workshop ids with
+  `ServerModSetup("<id>")`, and `<cluster>/<shard>/modoverrides.lua` enables `workshop-<id>` per
+  shard. gamehost rewrites only its own lines there; `ServerModCollectionSetup`, manual mod folders
+  and a mod's `configuration_options` are the player's and must survive a mod command. A numeric mod
+  name means `workshop-<id>`; installing that id and enabling the name is one operation.
 - `serve` binds `127.0.0.1:8080` and has no authentication; keep it on loopback and let a reverse
   proxy own access control.
 - The restore extractor rejects any tar entry that is not local to the target directory; keep that
@@ -201,8 +206,20 @@ Candidates, easiest first:
   never rewrite that file, and never treat the appended line as drift.
 - The DST binary needs `libcurl-gnutls.so.4`, which Fedora and Nobara do not package; the server
   exits 127 with `error while loading shared libraries` until it is on the loader path.
-- DST has no game ID: the cluster is found in the server browser by its `cluster_name`, or by
-  address and UDP port.
+- DST has no join code, but the Master prints `Telling Client our new session identifier: <hex>` in
+  `<cluster>/Master/server_log.txt` once the world starts. `SessionID` reads the last such line and
+  `Join` shows it as `session id`; before the first start it falls back to the `cluster_name`. Never
+  invent or cache this value in `instance.json`: the server writes a new one on every start, and
+  `state.GameID` is written from the log on a clean stop like every other game.
+- DST keeps the signal stop: a real `SIGTERM` exited 0, the wiki's Linux service example uses `kill`,
+  and `-console` cannot reach the Caves shard, which has no stdin. Do not add a Lua console stop.
+- `world recreate <name> --yes` is DST-only through the optional `game.WorldResetter` interface. It
+  refuses a running instance, writes a `pre-recreate_` safety archive and removes only
+  `<cluster>/Master/save/` plus `Caves/save/` when Caves runs. Never delete the ini, token, admin
+  list or logs: they are not generated world data. `--yes` is the confirmation; without it the
+  command must not touch anything. `world rollback <name> <archive>` is a named entry point to the
+  existing `restore` helper, not a wrapper for the undocumented `c_rollback` snapshot layout. Both
+  are command-only; the lobby reaches the same restore path from the Backups screen.
 - The Caves shard is a second process with `-shard Caves` and the next UDP port. Both shards share
   the Master's process group, so `state.json` keeps one pid and one stop signal reaches both; a
   shard that dies unasked stops the instance instead of leaving dead portals behind.
@@ -250,3 +267,7 @@ Candidates, easiest first:
   helper corrupts the frame); report through the model note or the error footer.
 - Terminal detection uses `charmbracelet/x/term`, not `os.ModeCharDevice`: `/dev/null` is a
   character device too, and pointing the lobby at it hides the UI.
+- The TUI repeats the README palette from `internal/tui/view.go`: white titles, `#38BDF8` accent,
+  `#7DD3FC` selected/success, `#0EA5E9` bold errors, `#0369A1` dim text and panel borders. Keep
+  status meaning in the ✓/!✗ markers and weight, not in a separate red or amber hue, and update
+  `TestStylesUseTheProfessionalPalette` when the palette changes.
